@@ -30,7 +30,7 @@ use crate::device::terminal::Terminal;
 use crate::memory::alloc::{AcpiHandler, KernelAllocator};
 use crate::interrupt::interrupt_dispatcher::InterruptDispatcher;
 use crate::log::Logger;
-use crate::process::scheduler::Scheduler;
+use crate::process::eevdf_scheduler::Scheduler;
 use crate::process::thread::Thread;
 use core::fmt::Arguments;
 use core::panic::PanicInfo;

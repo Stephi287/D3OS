@@ -24,7 +24,7 @@ use crate::memory::alloc::StackAllocator;
 use crate::memory::r#virtual::{VirtualMemoryArea, VmaType};
 use crate::memory::{MemorySpace, PAGE_SIZE};
 use crate::process::process::Process;
-use crate::process::scheduler;
+use crate::process::eevdf_scheduler;
 use crate::syscall::syscall_dispatcher::CORE_LOCAL_STORAGE_TSS_RSP0_PTR_INDEX;
 use crate::{memory, process_manager, scheduler, tss};
 use alloc::rc::Rc;
@@ -82,7 +82,7 @@ impl Thread {
         let user_stack = Vec::with_capacity_in(0, StackAllocator::default()); // Dummy stack
 
         let thread = Thread {
-            id: scheduler::next_thread_id(),
+            id: eevdf_scheduler::next_thread_id(),
             stacks: Mutex::new(Stacks::new(kernel_stack, user_stack)),
             process: process_manager().read() .kernel_process() .expect("Trying to create a kernel thread before process initialization!"),
             entry,
@@ -184,7 +184,7 @@ impl Thread {
 
         // create thread
         let thread = Thread {
-            id: scheduler::next_thread_id(),
+            id: eevdf_scheduler::next_thread_id(),
             stacks: Mutex::new(Stacks::new(kernel_stack, user_stack)),
             process,
             entry: unsafe { mem::transmute(ptr::null::<fn()>()) },
@@ -224,7 +224,7 @@ impl Thread {
 
         // create user thread and prepare the stack for starting it later
         let thread = Thread {
-            id: scheduler::next_thread_id(),
+            id: eevdf_scheduler::next_thread_id(),
             stacks: Mutex::new(Stacks::new(kernel_stack, user_stack)),
             process: parent,
             entry,
