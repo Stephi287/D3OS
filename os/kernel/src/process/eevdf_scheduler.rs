@@ -16,23 +16,25 @@ use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering::Relaxed;
 use smallmap::Map;
 use spin::{Mutex, MutexGuard};
+use log::{debug, info, warn, LevelFilter};
 
 // thread IDs
-static THREAD_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
+static THREAD_ID_COUNTER: AtomicUsize = AtomicUsize::new(1); //der erste Thread hat die ID = 1 
 
 pub fn next_thread_id() -> usize {
-    THREAD_ID_COUNTER.fetch_add(1, Relaxed)
+    THREAD_ID_COUNTER.fetch_add(1, Relaxed) //fetch_add = ID um 1 erhöhen und returnen
 }
 
 /// Everything related to the ready state in the scheduler
+//Threads die ready sind und warten vom Scheduler eingeteilt zu werden
 struct ReadyState {
-    initialized: bool,
-    current_thread: Option<Rc<Thread>>,
-    ready_queue: VecDeque<Rc<Thread>>,
+    initialized: bool, //ob ReadyState korrekt initialisiert ist
+    current_thread: Option<Rc<Thread>>, //kein Wert oder geteilter Zeiger auf current_thread
+    ready_queue: VecDeque<Rc<Thread>>, //kein Wert oder geteilter Zeiger auf ready_queue
 }
 
 impl ReadyState {
-    pub fn new() -> Self {
+    pub fn new() -> Self { //quasi Konstruktor für ReadyState
         Self {
             initialized: false,
             current_thread: None,
@@ -148,6 +150,7 @@ impl Scheduler {
         {
             // Execute in own block, so that the lock is released automatically (block() does not return)
             let mut sleep_list = self.sleep_list.lock();
+            debug!("Thread {} schläft für {}ms", thread.id(), ms);
             sleep_list.push((thread, wakeup_time));
         }
 
@@ -160,7 +163,7 @@ impl Scheduler {
     /// Parameters: `interrupt` true = called from ISR -> need to send EOI to APIC
     ///                         false = no EOI needed
     /// 
-    fn switch_thread(&self, interrupt: bool) {
+    fn switch_thread(&self, interrupt: bool) { //wird nur über helper_fn aufgerufen
         if let Some(mut state) = self.ready_state.try_lock() {
             if !state.initialized {
                 return;
@@ -175,6 +178,8 @@ impl Scheduler {
                 Some(thread) => thread,
                 None => return,
             };
+            
+            //debug!("Switche von Thread {} zu Thread {}", current.id(), next.id());
 
             // Current thread is initializing itself and may not be interrupted
             if current.stacks_locked() || tss().is_locked() {
@@ -248,7 +253,7 @@ impl Scheduler {
             for thread in join_list {
                 ready_state.ready_queue.push_front(Rc::clone(thread));
             }
-
+            debug!("Exit Thread {}", current.id());
             join_map.remove(&current.id());
         }
 
@@ -270,6 +275,9 @@ impl Scheduler {
             if current.id() == thread_id {
                 panic!("A thread cannot kill itself!");
             }
+
+            debug!("Kill Thread {}", current.id());
+
         }
 
         let state = self.get_ready_state_and_join_map();
