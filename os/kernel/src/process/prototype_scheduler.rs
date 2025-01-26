@@ -72,12 +72,12 @@ impl Scheduler {
         self.global
             .total_weight += 1;
 
-        self.global
-            .virtual_time = self.global.virtual_time - thread.request.lag / self.global.total_weight;
+
+        self.update_virtual_time(-thread.request.lag/self.global.total_weight);
 
         println!(
             "Total weight is now {} and the Virtual Time is {}",
-            self.global.total_weight, self.global.virtual_time
+            self.global.total_weight, self.get_virtual_time()
         );
 
         self.global
@@ -127,7 +127,7 @@ impl Scheduler {
                 req2.lag = actual_calc_time - CALC_TIME;
                 thread.request.lag = actual_calc_time - CALC_TIME;
 
-                self.global.virtual_time += actual_calc_time;
+                self.update_virtual_time(actual_calc_time);
 
                 //Aufgabe des Threads erfüllt?
                 if thread.duration <= 0 {
@@ -145,7 +145,7 @@ impl Scheduler {
 
     fn find_request(&mut self) -> Option<&Request> {
         for t in &self.global.request_tree {
-            if t.0.1 <= self.global.virtual_time {
+            if t.0.1 <= self.get_virtual_time() {
                 return Some(t.1);
             }
         }
@@ -161,14 +161,21 @@ impl Scheduler {
             .total_weight -= 1;
 
         if self.global.total_weight > 0 {
-            self.global
-            .virtual_time = self.global.virtual_time + thread.request.lag / self.global.total_weight;
+            self.update_virtual_time(thread.request.lag / self.global.total_weight);
         }
 
         println!(
             "Total weight is now {} and the Virtual Time is {}",
-            self.global.total_weight, self.global.virtual_time
+            self.global.total_weight, self.get_virtual_time()
         );
+    }
+
+    fn get_virtual_time(&self) -> i32 {
+        return self.global.virtual_time;
+    }
+
+    fn update_virtual_time(&mut self, time: i32) {
+        self.global.virtual_time += time;
     }
 }
 
