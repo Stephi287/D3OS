@@ -311,3 +311,52 @@ fn main() {
     }
 
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_threads() -> Vec<Thread> {
+        vec![
+            Thread {
+                id: next_thread_id(),
+                status: "ready".to_string(),
+                duration: 50,
+                request: Request {
+                    virtual_deadline: 20,
+                    virtual_eligible_time: 10,
+                    lag: 0,
+                    id: 1,
+                },
+                calc_time: 0
+            },
+        ]
+    }
+
+    #[test]
+    fn test_sleep() {
+        let mut threads = create_test_threads();
+        let mut scheduler = Scheduler::new();
+
+        scheduler.sleep(& mut threads, 1);
+
+        for thread in threads {
+            assert!(thread.status == "sleepy".to_string());
+        }
+    }
+
+    #[test]
+    fn test_lag() {
+        let mut threads = create_test_threads();
+        let mut scheduler = Scheduler::new();
+
+        scheduler.next_request(&mut threads);
+        scheduler.next_request(&mut threads);
+        scheduler.update_lag_for_all(&mut threads);
+
+        for thread in threads {
+            assert!(thread.calc_time == 20);
+        }
+    }
+}
