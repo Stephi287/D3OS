@@ -28,10 +28,11 @@ struct Thread {
     status: String,
     duration: i32,
     request: Request,
+    calc_time: i32
 }
 
 // jeder Thread soll 10ms rechnen
-const CALC_TIME: i32 = 10;
+const CALC_TIME: i32 = 30;
 
 #[derive(Debug, Clone, PartialEq)]
 struct Request {
@@ -46,6 +47,7 @@ struct Global {
     virtual_time: i32,
     total_weight: i32,
     request_tree: BTreeMap<(i32, i32, i32), Request>, // Keyed by virtual_deadline
+    sleep_tree: BTreeMap<(i32, i32, i32), Request>, // Keyed by virtual_deadline
 }
 
 #[derive(Debug)]
@@ -60,6 +62,7 @@ impl Scheduler {
                 virtual_time: 100,
                 total_weight: 0,
                 request_tree: BTreeMap::new(),
+                sleep_tree: BTreeMap::new(),
             },
         }
     }
@@ -95,43 +98,35 @@ impl Scheduler {
             );
 
             let req2 = req.clone(); // Kopiere den Request für die Rückgabe
-
-            let key = (req2.virtual_deadline, req2.virtual_eligible_time, req2.id); // Speichere den Schlüssel
-              
-            println!("Selected request with virtual_deadline {}", key.0);
-
             self.calc_req(threads, &req2);
         }
-    
     }
 
+    // Finde den zugehörigen Thread und simuliere Rechenzeit
     fn calc_req(&mut self, threads: &mut Vec<Thread>, req: &Request) {
-        // Finde den zugehörigen Thread und simuliere Rechenzeit
-        let mut req2 = req.clone();
-        //let fulfilled = true;
+        let req2 = req.clone();
 
         for thread in threads.iter_mut() {
-            println!("Request aus Thread {:?} entspricht Request aus Baum {:?}",
-                thread.request, req2);
             if thread.request == req2 {
+
+                println!("Request aus Thread {:?} entspricht Request aus Baum {:?}",
+                thread.request, req2);
+
+                //Hier festlegen wie lang gerechnet wurde um Lag zu simulieren
+                let actual_calc_time = 10;
+
                 println!(
                     "Updating thread {}: Reducing duration from {} to {}",
                     thread.id,
                     thread.duration,
-                    thread.duration - CALC_TIME
+                    thread.duration - actual_calc_time
                 );
 
-                //Rechnet für 10ms
-                thread.duration -= CALC_TIME; //sollte eigentlich Rechenzeit zurückgeben
-
-                //Hier festlegen wie lang gerechnet wurde um Lag zu simulieren
-                let actual_calc_time = 9;
-
-                self.update_lag(thread, &mut req2, actual_calc_time);
-
-                println!("Lag vom Thread = {} und von req2 = {}", thread.request.lag, req2.lag);
+                thread.calc_time = actual_calc_time;
+                thread.duration -= actual_calc_time; //sollte eigentlich Rechenzeit zurückgeben
 
                 self.update_virtual_time(actual_calc_time);
+                println!("Virtual Time now {}", self.get_virtual_time());
 
                 //Aufgabe des Threads erfüllt?
                 if thread.duration <= 0 {
@@ -187,12 +182,12 @@ impl Scheduler {
         );
     }
 
-    fn update_lag(&mut self, thread: &mut Thread, req: &mut Request, time: i32) {
+    /* fn update_lag(&mut self, thread: &mut Thread, req: &mut Request, time: i32) {
         req.lag += time - CALC_TIME;
         thread.request.lag += time - CALC_TIME;
 
         println!("Update-Lag: Lag von Request ist {}", req.lag);
-    }
+    } */
 
     fn get_virtual_time(&self) -> i32 {
         return self.global.virtual_time;
@@ -206,6 +201,12 @@ impl Scheduler {
         for t in &mut *threads {
             if t.id == id {
                 t.status = "sleepy".to_string();
+
+                let key = (t.request.virtual_deadline, t.request.virtual_eligible_time, t.request.id);
+                self.global.request_tree.remove(&key);
+                self.global.sleep_tree.insert(key, t.request.clone());
+
+                println!("Thread {} is now sleeping", t.id);
             }
         }
     }
@@ -214,6 +215,27 @@ impl Scheduler {
         for t in &mut *threads {
             if t.id == id {
                 t.status = "ready".to_string();
+
+                let key = (t.request.virtual_deadline, t.request.virtual_eligible_time, t.request.id);
+                self.global.sleep_tree.remove(&key);
+                self.global.request_tree.insert(key, t.request.clone());
+
+                println!("Thread {} is awake again", t.id);
+            }
+        }
+    }
+
+    fn update_lag_for_all(&mut self, threads: &mut Vec<Thread>) {
+        for t in threads {
+            if t.duration > 0 && t.status == "ready".to_string(){
+                t.request.lag += CALC_TIME / self.global.total_weight - t.calc_time;
+                println!("Lag für Request {} ist jetzt {}.", t.request.id, t.request.lag);
+
+                for req in &mut self.global.request_tree {
+                    if req.1.id == t.request.id {
+                        req.1.lag += CALC_TIME / self.global.total_weight - t.calc_time;
+                    }
+                }
             }
         }
     }
@@ -228,35 +250,38 @@ fn main() {
         Thread {
             id: next_thread_id(),
             status: "ready".to_string(),
-            duration: 50,
+            duration: 90,
             request: Request {
-                virtual_deadline: 100,
-                virtual_eligible_time: 10,
+                virtual_deadline: 300,
+                virtual_eligible_time: 110,
                 lag: 0,
                 id: next_request_id()
             },
+            calc_time: 0
         },
         Thread {
             id: next_thread_id(),
             status: "ready".to_string(),
-            duration: 30,
+            duration: 90,
             request: Request {
-                virtual_deadline: 80,
-                virtual_eligible_time: 5,
+                virtual_deadline: 220,
+                virtual_eligible_time: 90,
                 lag: 0,
                 id: next_request_id()
             },
+            calc_time: 0
         },
         Thread {
             id: next_thread_id(),
             status: "ready".to_string(),
-            duration: 20,
+            duration: 90,
             request: Request {
-                virtual_deadline: 120,
-                virtual_eligible_time: 60,
+                virtual_deadline: 210,
+                virtual_eligible_time: 130,
                 lag: 0,
                 id: next_request_id()
             },
+            calc_time: 0
         },
     ];
 
@@ -266,16 +291,23 @@ fn main() {
     }
 
     // Nächsten Request auswählen und zugehörigen Thread bearbeiten
-    scheduler.next_request(&mut threads);
-    scheduler.sleep(&mut threads, 2);
-    scheduler.next_request(&mut threads);
-    scheduler.next_request(&mut threads);
-    scheduler.next_request(&mut threads);
-    scheduler.next_request(&mut threads);
-    scheduler.next_request(&mut threads);
-    scheduler.next_request(&mut threads);
-    scheduler.wake(&mut threads, 2);
-    scheduler.next_request(&mut threads);
-    scheduler.next_request(&mut threads);
-    scheduler.next_request(&mut threads);
+    for _i in 0..5 {
+        scheduler.next_request(&mut threads);
+        scheduler.update_lag_for_all(&mut threads);
+    }
+
+    scheduler.sleep(&mut threads, 1);
+
+    for _i in 0..5 {
+        scheduler.next_request(&mut threads);
+        scheduler.update_lag_for_all(&mut threads);
+    }
+
+    scheduler.wake(&mut threads, 1);
+
+    for _i in 0..5 {
+        scheduler.next_request(&mut threads);
+        scheduler.update_lag_for_all(&mut threads);
+    }
+
 }
