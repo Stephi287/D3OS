@@ -6,8 +6,9 @@
    ║ Author: Fabian Ruhland, HHU                                             ║
    ╚═════════════════════════════════════════════════════════════════════════╝
 */
-use crate::process::thread::Thread;
+use crate::process::thread::{self, Thread};
 use crate::{allocator, apic, scheduler, timer, tss};
+use alloc::collections::btree_map::BTreeMap;
 use alloc::collections::VecDeque;
 use alloc::rc::Rc;
 use alloc::vec::Vec;
@@ -31,6 +32,7 @@ struct ReadyState {
     initialized: bool, //ob ReadyState korrekt initialisiert ist
     current_thread: Option<Rc<Thread>>, //kein Wert oder geteilter Zeiger auf current_thread
     ready_queue: VecDeque<Rc<Thread>>, //kein Wert oder geteilter Zeiger auf ready_queue
+    req_tree: BTreeMap<i32,Vec<Request>>, 
 }
 
 impl ReadyState {
@@ -39,8 +41,16 @@ impl ReadyState {
             initialized: false,
             current_thread: None,
             ready_queue: VecDeque::new(),
+            req_tree: BTreeMap::new(),
         }
     }
+}
+
+struct Request {
+    vd: i32,
+    ve: i32,
+    lag: i32,
+    thread: Option<Rc<Thread>>
 }
 
 /// Main struct of the scheduler
@@ -106,6 +116,11 @@ impl Scheduler {
         let mut state = self.get_ready_state();
         state.current_thread = state.ready_queue.pop_back();
 
+        //Hat Einfügen in den Baum geklappt?
+        for r in &state.req_tree {
+            debug!("Request eingefügt mit vd {}", r.0);
+        }
+
         unsafe { Thread::start_first(state.current_thread.as_ref().expect("Failed to dequeue first thread!").as_ref()); }
     }
 
@@ -118,6 +133,7 @@ impl Scheduler {
         let id = thread.id();
         let mut join_map;
         let mut state;
+        let thread2 = thread.clone();
 
         // If we get the lock on 'self.state' but not on 'self.join_map' the system hangs.
         // The scheduler is not able to switch threads anymore, because of 'self.state' is locked,
@@ -139,6 +155,18 @@ impl Scheduler {
 
         state.ready_queue.push_front(thread);
         join_map.insert(id, Vec::new());
+
+        //Einfügen das Threads als Request in die BTreeMap
+        let request = Request {
+            vd: 1,
+            ve: 0,
+            lag: 0,
+            thread: Some(thread2),
+        };
+    
+        let mut vec_req  = Vec::new();
+        vec_req.push(request);
+        state.req_tree.insert(1, vec_req);     
     }
 
     /// Description: Put calling thread to sleep for `ms` milliseconds
