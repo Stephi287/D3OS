@@ -33,6 +33,8 @@ struct ReadyState {
     current_thread: Option<Rc<Thread>>, //kein Wert oder geteilter Zeiger auf current_thread
     ready_queue: VecDeque<Rc<Thread>>, //kein Wert oder geteilter Zeiger auf ready_queue
     req_tree: BTreeMap<i32,Vec<Request>>, 
+    virtual_time: i32,
+    weight: i32,
 }
 
 impl ReadyState {
@@ -42,7 +44,17 @@ impl ReadyState {
             current_thread: None,
             ready_queue: VecDeque::new(),
             req_tree: BTreeMap::new(),
+            virtual_time: 0,
+            weight: 0,
         }
+    }
+
+    pub fn update_virtual_time(&mut self, time: i32) {
+        self.virtual_time += time;
+    }
+
+    pub fn update_weight(&mut self, weight: i32) {
+        self.weight += weight;
     }
 }
 
@@ -117,9 +129,13 @@ impl Scheduler {
         state.current_thread = state.ready_queue.pop_back();
 
         //Hat Einfügen in den Baum geklappt?
+        let l = state.req_tree.len();
         for r in &state.req_tree {
-            debug!("Request eingefügt mit vd {}", r.0);
+            for v in r.1 {
+                debug!("Request eingefügt mit vd {}", v.vd);
+            }
         }
+        debug!("Tree Size: {}", l as i32);
 
         unsafe { Thread::start_first(state.current_thread.as_ref().expect("Failed to dequeue first thread!").as_ref()); }
     }
@@ -156,18 +172,61 @@ impl Scheduler {
         state.ready_queue.push_front(thread);
         join_map.insert(id, Vec::new());
 
-        //Einfügen das Threads als Request in die BTreeMap
+        //EEVDF
+        state.update_virtual_time(10);
+        state.update_weight(1);
+
+        //Einfügen des Threads als Request in die BTreeMap
         let request = Request {
-            vd: 1,
-            ve: 0,
+            ve: state.virtual_time,
+            vd: state.virtual_time + 10,
             lag: 0,
             thread: Some(thread2),
         };
+
+        //Key bereits vorhanden
+        if let Some(vec_requests) = state.req_tree.get_mut(&request.vd) {
+            vec_requests.push(request);
+        } 
+        else {
+            //neu hinzufügen
+            let key = request.vd;
+            let mut vec_req  = Vec::new();
+            vec_req.push(request);
+            state.req_tree.insert(key, vec_req);   
+        }
     
-        let mut vec_req  = Vec::new();
-        vec_req.push(request);
-        state.req_tree.insert(1, vec_req);     
+          
     }
+
+    ///Thread rejoins after sleeping
+    /* pub fn re_join(&self, thread: Rc<Thread>) {
+        let mut state;
+        let thread2 = thread.clone();
+
+        // If we get the lock on 'self.state' but not on 'self.join_map' the system hangs.
+        // The scheduler is not able to switch threads anymore, because of 'self.state' is locked,
+        // and we will never be able to get the lock on 'self.join_map'.
+        // To solve this, we need to release the lock on 'self.state' in case we do not get
+        // the lock on 'self.join_map' and let the scheduler switch threads until we get both locks.
+        loop {
+            let state_mutex = self.get_ready_state();
+            let join_map_option = self.join_map.try_lock();
+
+            if join_map_option.is_some() {
+                state = state_mutex;
+                join_map = join_map_option.unwrap();
+                break;
+            } else {
+                self.switch_thread_no_interrupt();
+            }
+        }
+        //EEVDF
+        state.update_virtual_time(10);
+        state.update_weight(1);
+        //Request einfügen
+
+    } */
 
     /// Description: Put calling thread to sleep for `ms` milliseconds
     pub fn sleep(&self, ms: usize) {
@@ -183,6 +242,10 @@ impl Scheduler {
         }
 
         self.block(&mut state);
+
+        // EEVDF
+        // leave()
+        // add_to_sleep_list()
     }
 
     /// 
@@ -287,6 +350,20 @@ impl Scheduler {
 
         drop(current); // Decrease Rc manually, because block() does not return
         self.block(&mut ready_state);
+
+        //EEVDF
+        ready_state.update_virtual_time(-10);
+        ready_state.update_weight(-1);
+        //remove from tree:
+
+        //Wie komme ich an den key???
+        /* for r in ready_state.req_tree {
+            for vec_r in r.1 {
+                if vec_r.thread.id() == current.id() { //id für req speichern ?
+                    ready_state.req_tree.remove(&r.0);
+                }
+            }
+        } */
     }
 
     /// 
