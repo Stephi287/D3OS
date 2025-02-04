@@ -271,6 +271,13 @@ impl Scheduler {
             };
             
             //debug!("Switche von Thread {} zu Thread {}", current.id(), next.id());
+            /* let l = state.req_tree.len();
+            for r in &state.req_tree {
+                for v in r.1 {
+                    debug!("Request mit vd {} vorhanden", v.vd);
+                }
+            }
+            debug!("Tree Size: {}", l as i32); */
 
             // Current thread is initializing itself and may not be interrupted
             if current.stacks_locked() || tss().is_locked() {
@@ -348,22 +355,45 @@ impl Scheduler {
             join_map.remove(&current.id());
         }
 
-        drop(current); // Decrease Rc manually, because block() does not return
-        self.block(&mut ready_state);
-
         //EEVDF
+        let thread_clone = current.clone();
+
         ready_state.update_virtual_time(-10);
         ready_state.update_weight(-1);
-        //remove from tree:
 
-        //Wie komme ich an den key???
-        /* for r in ready_state.req_tree {
-            for vec_r in r.1 {
-                if vec_r.thread.id() == current.id() { //id für req speichern ?
-                    ready_state.req_tree.remove(&r.0);
+        let target_id = thread_clone.id();
+        let keys: Vec<_> = ready_state.req_tree.keys().cloned().collect();
+
+        for key in keys {
+            // Mit get_mut holen wir uns einen veränderlichen Zugriff auf den Vektor der Requests.
+            if let Some(vec_requests) = ready_state.req_tree.get_mut(&key) {
+                // Suchen nach dem Index des Requests, der zum Thread gehört.
+                if let Some(pos) = vec_requests.iter()
+                    .position(|req| req.thread.as_ref().map(|t| t.id()) == Some(target_id))
+                {
+                    // Entfernen des Requests aus dem Vektor.
+                    let removed_request = vec_requests.remove(pos);
+                    
+                    // Falls der Vektor nach dem Entfernen leer ist, entfernen wir auch den Schlüssel aus der Map.
+                    if vec_requests.is_empty() {
+                        ready_state.req_tree.remove(&key);
+                    }
                 }
             }
-        } */
+        }
+
+        debug!("Thread entfernt mit ID {}", target_id as i32);
+        //Hat Einfügen in den Baum geklappt?
+        let l = ready_state.req_tree.len();
+        for r in &ready_state.req_tree {
+            for v in r.1 {
+                debug!("Request mit vd {} vorhanden", v.vd);
+            }
+        }
+        debug!("Tree Size: {}", l as i32);
+
+        drop(current); // Decrease Rc manually, because block() does not return
+        self.block(&mut ready_state);
     }
 
     /// 
