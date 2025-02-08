@@ -56,13 +56,64 @@ impl ReadyState {
     pub fn update_weight(&mut self, weight: i32) {
         self.weight += weight;
     }
-}
 
+    /// Sucht in der BTreeMap `req_tree` nach dem Request, der zu `thread` gehört.
+    pub fn find_request_for_thread(&self, thread: &Rc<Thread>) -> Option<&Request> {
+        let target_id = thread.id();
+        // Durchlaufe alle Einträge in der BTreeMap
+        for (_vd, requests) in self.req_tree.iter() {
+            // Durchsuche den Vektor nach dem Request
+            for request in requests {
+                if let Some(ref req_thread) = request.thread {
+                    if req_thread.id() == target_id {
+                        return Some(request);
+                    }
+                }
+            }
+        }
+        // Falls kein Request gefunden wurde, None zurückgeben.
+        None
+    }
+
+    /// Entfernt den Request, der zum gegebenen `thread` gehört, aus der `req_tree`.
+    /// Gibt den entfernten Request zurück, falls vorhanden.
+    pub fn remove_request_for_thread(&mut self, thread: &Rc<Thread>) -> Option<Request> {
+        let target_id = thread.id();
+
+        // Erstelle eine Kopie aller Schlüssel, damit wir während der Iteration die Map modifizieren können.
+        let keys: Vec<_> = self.req_tree.keys().cloned().collect();
+
+        // Iteriere über alle Schlüssel der BTreeMap.
+        for key in keys {
+            // Hole einen veränderlichen Zugriff auf den Vektor der Requests für den aktuellen Schlüssel.
+            if let Some(requests) = self.req_tree.get_mut(&key) {
+                // Suche nach der Position des Requests, dessen Thread-ID mit target_id übereinstimmt.
+                if let Some(pos) = requests.iter().position(|req| {
+                    req.thread.as_ref().map(|t| t.id()) == Some(target_id)
+                }) {
+                    // Entferne den Request aus dem Vektor.
+                    let removed_request = requests.remove(pos);
+                    
+                    // Wenn der Vektor nach dem Entfernen leer ist, entferne auch den Schlüssel aus der Map.
+                    if requests.is_empty() {
+                        self.req_tree.remove(&key);
+                    }
+                    
+                    return Some(removed_request);
+                }
+            }
+        }
+        // Falls kein passender Request gefunden wurde, gebe None zurück.
+        None
+    }
+}
+#[derive(Clone)]
 struct Request {
     vd: i32,
     ve: i32,
     lag: i32,
-    thread: Option<Rc<Thread>>
+    thread: Option<Rc<Thread>>,
+    id: usize,
 }
 
 /// Main struct of the scheduler
@@ -132,7 +183,8 @@ impl Scheduler {
         let l = state.req_tree.len();
         for r in &state.req_tree {
             for v in r.1 {
-                debug!("Request eingefügt mit vd {}", v.vd);
+                //debug!("Request eingefügt mit vd {}", v.vd);
+                debug!("Request {} eingefügt", v.id as i32);
             }
         }
         debug!("Tree Size: {}", l as i32);
@@ -182,6 +234,7 @@ impl Scheduler {
             vd: state.virtual_time + 10,
             lag: 0,
             thread: Some(thread2),
+            id: next_thread_id(),
         };
 
         //Key bereits vorhanden
@@ -235,17 +288,33 @@ impl Scheduler {
         let wakeup_time = timer().systime_ms() + ms;
 
         {
+            //EEVDF
+            //1 Thread weniger aktiv -> weight reduzieren
+            state.update_weight(-1);
+
+            if let Some(request) = state.remove_request_for_thread(&thread) {
+                state.sleep_list_eevdf.push((request, ms));
+            }
+
+            /* 
+            req_tree: map: key value: vd Vec<Request>
+            Request: thread
+
+            sleep: put current to sleep for x ms
+            request anhand von thread aus req_tree entfernen
+            request in sleep_tree einfügen
+            -> sleep_tree kann auch sleep_list sein
+            sleep_list: list: Tupel: (Vec<Request>, x)
+            */
+
             // Execute in own block, so that the lock is released automatically (block() does not return)
             let mut sleep_list = self.sleep_list.lock();
             debug!("Thread {} schläft für {}ms", thread.id(), ms);
             sleep_list.push((thread, wakeup_time));
+            //debug!("Thread schläft ab {}", timer().systime_ms() as i32);  
         }
 
         self.block(&mut state);
-
-        // EEVDF
-        // leave()
-        // add_to_sleep_list()
     }
 
     /// 
@@ -269,15 +338,6 @@ impl Scheduler {
                 Some(thread) => thread,
                 None => return,
             };
-            
-            //debug!("Switche von Thread {} zu Thread {}", current.id(), next.id());
-            /* let l = state.req_tree.len();
-            for r in &state.req_tree {
-                for v in r.1 {
-                    debug!("Request mit vd {} vorhanden", v.vd);
-                }
-            }
-            debug!("Tree Size: {}", l as i32); */
 
             // Current thread is initializing itself and may not be interrupted
             if current.stacks_locked() || tss().is_locked() {
