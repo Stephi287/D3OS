@@ -33,6 +33,7 @@ struct ReadyState {
     current_thread: Option<Rc<Thread>>, //kein Wert oder geteilter Zeiger auf current_thread
     ready_queue: VecDeque<Rc<Thread>>, //kein Wert oder geteilter Zeiger auf ready_queue
     req_tree: BTreeMap<i32,Vec<Request>>, 
+    sleep_list_eevdf: Vec<(Request, usize)>,
     virtual_time: i32,
     weight: i32,
 }
@@ -44,6 +45,7 @@ impl ReadyState {
             current_thread: None,
             ready_queue: VecDeque::new(),
             req_tree: BTreeMap::new(),
+            sleep_list_eevdf: Vec::new(),
             virtual_time: 0,
             weight: 0,
         }
@@ -360,6 +362,62 @@ impl Scheduler {
         }
     }
 
+    pub fn next_request(&self, interrupt: bool) {
+        if let Some(mut state) = self.ready_state.try_lock() {
+            let mut state = self.get_ready_state();
+
+            if !state.initialized {
+                return;
+            }
+
+            //aufgewachte Threads in den Request-Tree schieben
+            Scheduler::check_sleep_list_eevdf(&mut state);
+
+            //wer ist aktueller Thread?
+            let current = Scheduler::current(&state);
+
+            //erster Eintrag im Baum = niedrigste VD = nächster Request
+            let next_req = match state.req_tree.pop_first() { //neuen raus nehmen
+                Some(req) => req,
+                None => return,
+            };
+            //falls 2 Requests dieselbe VD haben, den ersten nehmen
+            let next_thread = match next_req.1.first(){
+                Some(req) => req,
+                None => return,
+            };
+            //Thread aus dem Request holen
+            let next = match &next_thread.thread {
+                Some(thread) => thread,
+                None => return,
+            };
+
+            // Current thread is initializing itself and may not be interrupted
+            if current.stacks_locked() || tss().is_locked() {
+                return;
+            }
+            //Pointer auf aktuellen und nächsten Thread finden
+            let current_ptr = ptr::from_ref(current.as_ref());
+            let next_ptr = ptr::from_ref(next.as_ref());
+
+            //aktuellen Thread auf nächsten setzen im ReadyState
+            state.current_thread = Some(next.clone());
+
+            //Berechnung der neuen vd ?
+            //Berechnung von lag -> wie lang wurde tatsächlich gerechnet
+            state.req_tree.insert(next_thread.vd, next_req.1); //alten wieder rein tun
+
+            if interrupt {
+                apic().end_of_interrupt();
+            }
+
+            //eigentliches Switchen des Threads
+            unsafe {
+                Thread::switch(current_ptr, next_ptr);
+            }
+        }
+    }
+
     /// Description: helper function, calling `switch_thread`
     pub fn switch_thread_no_interrupt(&self) {
         self.switch_thread(false);
@@ -534,12 +592,45 @@ impl Scheduler {
     fn check_sleep_list(state: &mut ReadyState, sleep_list: &mut Vec<(Rc<Thread>, usize)>) {
         let time = timer().systime_ms();
 
+        //falls die sleep-Zeit abgelaufen ist, wird es in die ready queue gepusht, sonst bleibt es in der Liste
         sleep_list.retain(|entry| {
             if time >= entry.1 {
+                //debug!("Thread ist wach ab {}", timer().systime_ms() as i32);
                 state.ready_queue.push_front(Rc::clone(&entry.0));
+
                 return false;
             }
+            return true;
+        });
+    }
 
+    fn check_sleep_list_eevdf(state: &mut ReadyState) {
+        let time = timer().systime_ms();
+        let weight = &mut state.weight;
+
+        state.sleep_list_eevdf.retain(|entry| {
+            if time >= entry.1 {
+                //debug!("Thread ist wach ab {}", timer().systime_ms() as i32);
+
+                //EEVDF
+                *weight += 1;
+                //Werte des Requests in der sleep-Liste anpassen
+                //angepassten Request wieder in Baum einfügen
+                //vt muss durch Lag angepasst werden
+
+                //Key bereits vorhanden
+                if let Some(vec_requests) = state.req_tree.get_mut(&entry.0.vd) {
+                    vec_requests.push(entry.0.clone());
+                } 
+                else {
+                    //neu hinzufügen
+                    let key = entry.0.vd;
+                    let mut vec_req  = Vec::new();
+                    vec_req.push(entry.0.clone());
+                    state.req_tree.insert(key, vec_req);   
+                }
+                return false;
+            }
             return true;
         });
     }
