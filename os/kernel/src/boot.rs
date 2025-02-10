@@ -273,7 +273,7 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
 
     // Start APIC timer & scheduler
     info!("Starting scheduler");
-    apic().start_timer(10);
+    apic().start_timer(5);
     scheduler().start();
 }
 

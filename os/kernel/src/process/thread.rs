@@ -26,7 +26,7 @@ use crate::memory::{MemorySpace, PAGE_SIZE};
 use crate::process::process::Process;
 use crate::process::eevdf_scheduler;
 use crate::syscall::syscall_dispatcher::CORE_LOCAL_STORAGE_TSS_RSP0_PTR_INDEX;
-use crate::{memory, process_manager, scheduler, tss};
+use crate::{memory, process_manager, scheduler, timer, tss};
 use alloc::rc::Rc;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -58,6 +58,7 @@ pub struct Thread {
     process: Arc<Process>, // reference to my process
     entry: fn(),           // user thread: =0;                 kernel thread: address of entry function
     user_rip: VirtAddr,    // user thread: elf-entry function; kernel thread: =0
+    accounting: Mutex<ThreadAccounting>,
 }
 
 impl Stacks {
@@ -87,6 +88,7 @@ impl Thread {
             process: process_manager().read() .kernel_process() .expect("Trying to create a kernel thread before process initialization!"),
             entry,
             user_rip: VirtAddr::zero(),
+            accounting: Mutex::new(ThreadAccounting {time: 0, last_update: 0})
         };
 
         thread.prepare_kernel_stack();
@@ -189,6 +191,7 @@ impl Thread {
             process,
             entry: unsafe { mem::transmute(ptr::null::<fn()>()) },
             user_rip: VirtAddr::new(elf.entry),
+            accounting: Mutex::new(ThreadAccounting {time: 0, last_update: 0})
         };
 
         thread.prepare_kernel_stack();
@@ -229,6 +232,7 @@ impl Thread {
             process: parent,
             entry,
             user_rip: kickoff_addr,
+            accounting: Mutex::new(ThreadAccounting {time: 0, last_update: 0})
         };
 
         thread.prepare_kernel_stack();
@@ -410,6 +414,26 @@ impl Thread {
             thread_user_start(old_rsp0, self.entry);
         }
     }
+
+    /// Aktualisiert die Accounting-Daten des Threads.
+    pub fn update_accounting(&self, current_time: i32) {
+        // Sperre den Mutex und rufe die update()-Methode auf.
+        if let Some(mut accounting) = self.accounting.try_lock() {
+        accounting.update(current_time);
+        }
+    }
+
+    pub fn get_accounting(&self) -> i32 {
+        // Sperre den Mutex und rufe die update()-Methode auf.
+        let  accounting = self.accounting.lock();
+        return accounting.time;
+    }
+
+    pub fn reset_acc(&self) {
+        if let Some(mut accounting) = self.accounting.try_lock() {
+            accounting.reset();
+        }
+    }
 }
 
 /// Description: Low-level function for starting a thread in kernel mode
@@ -509,4 +533,24 @@ unsafe extern "C" fn thread_switch(current_rsp0: *mut u64, next_rsp0: u64, next_
     "ret", // Return to next thread
     CORE_LOCAL_STORAGE_TSS_RSP0_PTR_INDEX = const CORE_LOCAL_STORAGE_TSS_RSP0_PTR_INDEX
     )
+}
+
+
+
+pub struct ThreadAccounting {
+    pub time: i32,
+    pub last_update: i32,
+}
+
+impl ThreadAccounting {
+    pub fn update(&mut self, current_time: i32) {
+        let time_difference = current_time.saturating_sub(self.last_update);
+        self.time += time_difference;
+        self.last_update = current_time;
+    }
+
+    pub fn reset(&mut self) {
+        self.time = 0;
+        self.last_update = timer().systime_ms() as i32;
+    }
 }

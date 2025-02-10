@@ -60,7 +60,7 @@ impl ReadyState {
     }
 
     /// Sucht in der BTreeMap `req_tree` nach dem Request, der zu `thread` gehört.
-    pub fn find_request_for_thread(&self, thread: &Rc<Thread>) -> Option<&Request> {
+    pub fn find_request_for_thread(&self, thread: &Rc<Thread>) -> Option<Request> {
         let target_id = thread.id();
         // Durchlaufe alle Einträge in der BTreeMap
         for (_vd, requests) in self.req_tree.iter() {
@@ -68,7 +68,7 @@ impl ReadyState {
             for request in requests {
                 if let Some(ref req_thread) = request.thread {
                     if req_thread.id() == target_id {
-                        return Some(request);
+                        return Some(request.clone());
                     }
                 }
             }
@@ -348,6 +348,8 @@ impl Scheduler {
 
             let current_ptr = ptr::from_ref(current.as_ref());
             let next_ptr = ptr::from_ref(next.as_ref());
+
+            //debug!("Runtime: {}", current.get_accounting());
 
             state.current_thread = Some(next);
             state.ready_queue.push_front(current);
@@ -666,6 +668,74 @@ impl Scheduler {
             } else {
                 self.switch_thread_no_interrupt();
             }
+        }
+    }
+
+    /// Aktualisiert die Accounting-Daten des aktuell laufenden Threads.
+    pub fn update_current_thread_accounting(&self) {
+        if let Some(mut state) = self.ready_state.try_lock() {
+            if !state.initialized {
+                return;
+            }
+            //FRAGE: Wieso geht es wenn ich try.lock() mache bzw was macht das???
+
+        //let state = self.get_ready_state();
+        let current = Scheduler::current(&state);
+
+        self.update_lag(&mut state);
+    
+    
+        let current_time = timer().systime_ms();
+        //debug!("Updating thread accounting. Current time: {}", current_time);
+
+        current.update_accounting(current_time as i32);
+        //debug!("Updated thread runtime: {}", current.get_accounting());
+        
+        }
+
+    }
+
+    /// Prüft, ob der aktuell laufende Thread bereits sein Zeitquant überschritten hat.
+    pub fn should_switch_thread(&self) -> bool {
+        if let Some(mut state) = self.ready_state.try_lock() {
+            if !state.initialized {
+                return false;
+            }
+        let current = Scheduler::current(&state);
+
+        debug!("Runtime: {} for Thread {}", current.get_accounting(), current.id());
+
+        // Beispiel: Wechsel erzwingen, wenn der Thread länger als 10ms lief
+        return current.get_accounting() >= 10;
+        }
+        return false;
+    }
+
+    pub fn reset_accounting(&self) {
+        if let Some(mut state) = self.ready_state.try_lock() {
+            if !state.initialized {
+                return;
+            }
+        let current = Scheduler::current(&state);
+        
+        // Beispiel: Wechsel erzwingen, wenn der Thread länger als 10ms lief
+        debug!("RESET");
+
+        current.reset_acc();
+        }
+        debug!("reset else");
+
+    }
+
+    fn update_lag(&self, state: &mut ReadyState) {
+        let current = Scheduler::current(&state);
+
+        state.virtual_time += current.get_accounting();
+
+
+        if let Some(mut request) = state.find_request_for_thread(&current) {
+            request.lag = 10 - current.get_accounting();
+            debug!("Lag = {} mit ID {}, VT = {}", request.lag, current.id(), state.virtual_time);
         }
     }
 }
