@@ -418,9 +418,8 @@ impl Thread {
     /// Aktualisiert die Accounting-Daten des Threads.
     pub fn update_accounting(&self, current_time: i32) {
         // Sperre den Mutex und rufe die update()-Methode auf.
-        if let Some(mut accounting) = self.accounting.try_lock() {
+        let mut accounting = self.accounting.lock();
         accounting.update(current_time);
-        }
     }
 
     pub fn get_accounting(&self) -> i32 {
@@ -430,9 +429,9 @@ impl Thread {
     }
 
     pub fn reset_acc(&self) {
-        if let Some(mut accounting) = self.accounting.try_lock() {
-            accounting.reset();
-        }
+        let mut accounting = self.accounting.lock();
+        accounting.reset();
+        
     }
 }
 

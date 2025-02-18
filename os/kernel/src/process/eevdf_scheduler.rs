@@ -77,6 +77,18 @@ impl ReadyState {
         None
     }
 
+    pub fn find_request_for_thread_mut(&mut self, thread: &Rc<Thread>) -> Option<&mut Request> { 
+        let target_id = thread.id(); 
+        for (_vd, requests) in self.req_tree.iter_mut() { 
+            if let Some(request) = requests.iter_mut()
+            .find(|req| req.thread.as_ref()
+            .map(|t| t.id()) == Some(target_id)) { 
+                return Some(request); 
+            } 
+        } 
+        None 
+    }
+
     /// Entfernt den Request, der zum gegebenen `thread` gehört, aus der `req_tree`.
     /// Gibt den entfernten Request zurück, falls vorhanden.
     pub fn remove_request_for_thread(&mut self, thread: &Rc<Thread>) -> Option<Request> {
@@ -170,7 +182,7 @@ impl Scheduler {
 
     /// Description: Return reference to thread for the given `thread_id`
     pub fn thread(&self, thread_id: usize) -> Option<Rc<Thread>> {
-        self.ready_state.lock().ready_queue
+        self.ready_state.lock().ready_queue //ready state locken, um aktuellen Thread zu finden
             .iter()
             .find(|thread| thread.id() == thread_id)
             .cloned()
@@ -199,7 +211,7 @@ impl Scheduler {
     /// 
     /// Parameters: `thread` thread to be inserted.
     /// 
-    pub fn ready(&self, thread: Rc<Thread>) {
+    pub fn ready(&self, thread: Rc<Thread>) { //Thread joint zum ersten Mal, lag = 0
         let id = thread.id();
         let mut join_map;
         let mut state;
@@ -227,8 +239,9 @@ impl Scheduler {
         join_map.insert(id, Vec::new());
 
         //EEVDF
-        state.update_virtual_time(10);
+        //Virtual Time: Thread joint zum ersten Mal, lag = 0
         state.update_weight(1);
+        let id = thread2.id();
 
         //Einfügen des Threads als Request in die BTreeMap
         let request = Request {
@@ -236,7 +249,7 @@ impl Scheduler {
             vd: state.virtual_time + 10,
             lag: 0,
             thread: Some(thread2),
-            id: next_thread_id(),
+            id: id,
         };
 
         //Key bereits vorhanden
@@ -295,6 +308,7 @@ impl Scheduler {
             state.update_weight(-1);
 
             if let Some(request) = state.remove_request_for_thread(&thread) {
+                state.virtual_time += request.lag / state.weight;
                 state.sleep_list_eevdf.push((request, ms));
             }
 
@@ -350,6 +364,34 @@ impl Scheduler {
             let next_ptr = ptr::from_ref(next.as_ref());
 
             //debug!("Runtime: {}", current.get_accounting());
+            //self.update_lag(&mut state);
+
+            let x = current.get_accounting();
+
+            state.virtual_time += x;
+
+           /*  if let Some(mut request) = state.find_request_for_thread(&current) {
+                request.lag = 10 - x;
+                debug!("Lag = {} mit ID {}, VT = {}", request.lag, current.id(), state.virtual_time);
+            } */
+
+            //state.update_lag_of_request_for_thread(&current, x);
+
+            if let Some(request) = state.find_request_for_thread_mut(&current) { 
+                request.lag += 10 - x; 
+                //debug!("Lag = {} mit ID {}, VT = {}", request.lag, current.id(), state.virtual_time);
+            }
+            
+        
+            let current_time = timer().systime_ms();
+            //debug!("Updating thread accounting. Current time: {}", current_time);
+
+            current.update_accounting(current_time as i32);
+
+            if x >= 10 {
+                debug!("Updated thread runtime: {}", x);
+                current.reset_acc();
+            }
 
             state.current_thread = Some(next);
             state.ready_queue.push_front(current);
@@ -620,6 +662,8 @@ impl Scheduler {
                 //angepassten Request wieder in Baum einfügen
                 //vt muss durch Lag angepasst werden
 
+                state.virtual_time -= entry.0.lag/ *weight;
+
                 //Key bereits vorhanden
                 if let Some(vec_requests) = state.req_tree.get_mut(&entry.0.vd) {
                     vec_requests.push(entry.0.clone());
@@ -679,20 +723,23 @@ impl Scheduler {
             }
             //FRAGE: Wieso geht es wenn ich try.lock() mache bzw was macht das???
 
-        //let state = self.get_ready_state();
-        let current = Scheduler::current(&state);
+            //let state = self.get_ready_state();
+            let current = Scheduler::current(&state);
 
-        self.update_lag(&mut state);
-    
-    
-        let current_time = timer().systime_ms();
-        //debug!("Updating thread accounting. Current time: {}", current_time);
-
-        current.update_accounting(current_time as i32);
-        //debug!("Updated thread runtime: {}", current.get_accounting());
+            self.update_lag(&mut state);
         
-        }
+        
+            let current_time = timer().systime_ms();
+            //debug!("Updating thread accounting. Current time: {}", current_time);
 
+            current.update_accounting(current_time as i32);
+            debug!("Updated thread runtime: {}", current.get_accounting());
+
+            if current.get_accounting() >= 10 {
+                current.reset_acc();
+                self.switch_thread_from_interrupt();
+            }
+        }
     }
 
     /// Prüft, ob der aktuell laufende Thread bereits sein Zeitquant überschritten hat.
@@ -736,6 +783,6 @@ impl Scheduler {
         if let Some(mut request) = state.find_request_for_thread(&current) {
             request.lag = 10 - current.get_accounting();
             debug!("Lag = {} mit ID {}, VT = {}", request.lag, current.id(), state.virtual_time);
-        }
+        } 
     }
 }
