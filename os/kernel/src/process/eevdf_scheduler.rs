@@ -344,6 +344,7 @@ impl Scheduler {
             state.update_weight(-1);
 
             if let Some(request) = state.remove_request_for_thread(&thread) {
+                debug!("Thread {} hat Lag {}", thread.id(), request.lag);
                 state.virtual_time += request.lag / state.weight;
                 state.sleep_list_eevdf.push((request, ms));
             }
@@ -384,6 +385,7 @@ impl Scheduler {
             if let Some(mut sleep_list) = self.sleep_list.try_lock() {
                 Scheduler::check_sleep_list(&mut state, &mut sleep_list);
             }
+            Scheduler::check_sleep_list_eevdf(&mut state);
 
             let current = Scheduler::current(&state);
             let next = match state.ready_queue.pop_back() {
@@ -403,6 +405,98 @@ impl Scheduler {
             //self.update_lag(&mut state);
 
             let x = current.get_accounting();
+            let current_time = timer().systime_ms();
+
+            state.virtual_time += x;
+
+            let time = state.virtual_time;
+
+           /*  if let Some(mut request) = state.find_request_for_thread(&current) {
+                request.lag = 10 - x;
+                debug!("Lag = {} mit ID {}, VT = {}", request.lag, current.id(), state.virtual_time);
+            } */
+
+            //state.update_lag_of_request_for_thread(&current, x);
+
+            if let Some(request) = state.find_request_for_thread_mut(&current) { 
+                request.lag += 10 - x; 
+                debug!("Lag = {} mit ID {}, VT = {}", request.lag, current.id(), time);
+            }
+            
+        
+            let current_time = timer().systime_ms();
+            //debug!("Updating thread accounting. Current time: {}", current_time);
+
+            current.update_accounting(current_time as i32);
+
+            if x >= 10 {
+                debug!("Updated thread runtime: {} for ID {}", x, current.id());
+                current.reset_acc();
+            }
+            else {
+                debug!("FAIL Updated thread runtime: {} for ID {}", x, current.id());
+            }
+
+            state.current_thread = Some(next);
+            state.ready_queue.push_front(current);
+
+            if interrupt {
+                apic().end_of_interrupt();
+            }
+
+            debug!("cur pointer: {}, next pointer: {}", current_ptr as i32, next_ptr as i32);
+            unsafe {
+                Thread::switch(current_ptr, next_ptr);
+            }
+        }
+    }
+
+    pub fn next_request(&self, interrupt: bool) {
+        if let Some(mut state) = self.ready_state.try_lock() {
+            //let mut state = self.get_ready_state();
+
+            if !state.initialized {
+                return;
+            }
+
+            //aufgewachte Threads in den Request-Tree schieben
+            Scheduler::check_sleep_list_eevdf(&mut state);
+
+            //wer ist aktueller Thread?
+            let current = Scheduler::current(&state);
+
+            //erste Threads haben dieselbe VD und sind alle in einem Vektor
+
+            let next = {
+            //erster Eintrag im Baum = niedrigste VD = nächster Request
+                let next_req = match state.req_tree.first_key_value(){ //neuen raus nehmen
+                Some(req) => req,
+                None => return,
+            };
+            //falls 2 Requests dieselbe VD haben, den ersten nehmen
+            let next_thread = match next_req.1.first(){
+                Some(req) => req,
+                None => return,
+            };
+            //Thread aus dem Request holen
+                match &next_thread.thread {
+                    Some(thread) => thread.clone(),
+                None => return,
+                }
+            };
+
+            // Current thread is initializing itself and may not be interrupted
+            if current.stacks_locked() || tss().is_locked() {
+                return;
+            }
+            //Pointer auf aktuellen und nächsten Thread finden
+            let current_ptr = ptr::from_ref(current.as_ref());
+            let next_ptr = ptr::from_ref(next.as_ref());
+
+            debug!("VOR ACCOUNTING");
+            
+            let x = current.get_accounting();
+            let current_time = timer().systime_ms();
 
             state.virtual_time += x;
 
@@ -415,11 +509,17 @@ impl Scheduler {
 
             if let Some(request) = state.find_request_for_thread_mut(&current) { 
                 request.lag += 10 - x; 
+                
                 //debug!("Lag = {} mit ID {}, VT = {}", request.lag, current.id(), state.virtual_time);
             }
+
+            if let Some(request) = state.find_request_for_thread(&current) { 
+                let req = request.clone();
+                insert_request(&mut state, &req);
+            }
+
+
             
-        
-            let current_time = timer().systime_ms();
             //debug!("Updating thread accounting. Current time: {}", current_time);
 
             current.update_accounting(current_time as i32);
@@ -428,84 +528,43 @@ impl Scheduler {
                 debug!("Updated thread runtime: {}", x);
                 current.reset_acc();
             }
-
-            state.current_thread = Some(next);
-            state.ready_queue.push_front(current);
-
-            if interrupt {
-                apic().end_of_interrupt();
+            else {
+                debug!("FAIL Updated thread runtime: {} for ID {}", x, current.id());
             }
-
-            unsafe {
-                Thread::switch(current_ptr, next_ptr);
-            }
-        }
-    }
-
-    pub fn next_request(&self, interrupt: bool) {
-        if let Some(mut state) = self.ready_state.try_lock() {
-            let mut state = self.get_ready_state();
-
-            if !state.initialized {
-                return;
-            }
-
-            //aufgewachte Threads in den Request-Tree schieben
-            Scheduler::check_sleep_list_eevdf(&mut state);
-
-            //wer ist aktueller Thread?
-            let current = Scheduler::current(&state);
-
-            //erster Eintrag im Baum = niedrigste VD = nächster Request
-            let next_req = match state.req_tree.pop_first() { //neuen raus nehmen
-                Some(req) => req,
-                None => return,
-            };
-            //falls 2 Requests dieselbe VD haben, den ersten nehmen
-            let next_thread = match next_req.1.first(){
-                Some(req) => req,
-                None => return,
-            };
-            //Thread aus dem Request holen
-            let next = match &next_thread.thread {
-                Some(thread) => thread,
-                None => return,
-            };
-
-            // Current thread is initializing itself and may not be interrupted
-            if current.stacks_locked() || tss().is_locked() {
-                return;
-            }
-            //Pointer auf aktuellen und nächsten Thread finden
-            let current_ptr = ptr::from_ref(current.as_ref());
-            let next_ptr = ptr::from_ref(next.as_ref());
 
             //aktuellen Thread auf nächsten setzen im ReadyState
             state.current_thread = Some(next.clone());
 
+            //was muss hier tatsächlich eingefügt werden und muess es wie bei ready sewin
+
             //Berechnung der neuen vd ?
             //Berechnung von lag -> wie lang wurde tatsächlich gerechnet
-            state.req_tree.insert(next_thread.vd, next_req.1); //alten wieder rein tun
+            //state.req_tree.insert(next_thread.vd, next_req.1); //alten wieder rein tun
+
 
             if interrupt {
                 apic().end_of_interrupt();
             }
 
+            debug!("cur pointer: {}, next pointer: {}", current_ptr as i32, next_ptr as i32);
             //eigentliches Switchen des Threads
+            if current_ptr != next_ptr {
             unsafe {
                 Thread::switch(current_ptr, next_ptr);
             }
+            }
+            
         }
     }
 
     /// Description: helper function, calling `switch_thread`
     pub fn switch_thread_no_interrupt(&self) {
-        self.switch_thread(false);
+        self.next_request(false);
     }
 
     /// Description: helper function, calling `switch_thread`
     pub fn switch_thread_from_interrupt(&self) {
-        self.switch_thread(true);
+        self.next_request(true);
     }
 
     /// 
@@ -751,8 +810,8 @@ impl Scheduler {
         }
     }
 
-    /// Aktualisiert die Accounting-Daten des aktuell laufenden Threads.
-    pub fn update_current_thread_accounting(&self) {
+    // Aktualisiert die Accounting-Daten des aktuell laufenden Threads.
+    /* pub fn update_current_thread_accounting(&self) {
         if let Some(mut state) = self.ready_state.try_lock() {
             if !state.initialized {
                 return;
@@ -776,10 +835,10 @@ impl Scheduler {
                 self.switch_thread_from_interrupt();
             }
         }
-    }
+    } */
 
-    /// Prüft, ob der aktuell laufende Thread bereits sein Zeitquant überschritten hat.
-    pub fn should_switch_thread(&self) -> bool {
+    // Prüft, ob der aktuell laufende Thread bereits sein Zeitquant überschritten hat.
+    /* pub fn should_switch_thread(&self) -> bool {
         if let Some(mut state) = self.ready_state.try_lock() {
             if !state.initialized {
                 return false;
@@ -792,9 +851,9 @@ impl Scheduler {
         return current.get_accounting() >= 10;
         }
         return false;
-    }
+    } */
 
-    pub fn reset_accounting(&self) {
+    /* pub fn reset_accounting(&self) {
         if let Some(mut state) = self.ready_state.try_lock() {
             if !state.initialized {
                 return;
@@ -808,9 +867,9 @@ impl Scheduler {
         }
         debug!("reset else");
 
-    }
+    } */
 
-    fn update_lag(&self, state: &mut ReadyState) {
+    /* fn update_lag(&self, state: &mut ReadyState) {
         let current = Scheduler::current(&state);
 
         state.virtual_time += current.get_accounting();
@@ -820,5 +879,18 @@ impl Scheduler {
             request.lag = 10 - current.get_accounting();
             debug!("Lag = {} mit ID {}, VT = {}", request.lag, current.id(), state.virtual_time);
         } 
+    } */
+}
+
+fn insert_request(state: &mut ReadyState, request: &Request) {
+    if let Some(vec_requests) = state.req_tree.get_mut(&request.vd) {
+        vec_requests.push(request.clone());
+    } 
+    else {
+        //neu hinzufügen
+        let key = request.vd;
+        let mut vec_req  = Vec::new();
+        vec_req.push(request.clone());
+        state.req_tree.insert(key, vec_req);   
     }
 }
