@@ -30,6 +30,7 @@ use crate::{memory, process_manager, scheduler, timer, tss};
 use alloc::rc::Rc;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use log::debug;
 use core::arch::naked_asm;
 use core::{mem, ptr};
 use goblin::elf::Elf;
@@ -543,8 +544,14 @@ pub struct ThreadAccounting {
 
 impl ThreadAccounting {
     pub fn update(&mut self, current_time: i32) {
-        let time_difference = current_time.saturating_sub(self.last_update);
+        let mut time_difference = 0;
+
+        if self.last_update != 0 {
+            time_difference = current_time.saturating_sub(self.last_update);
+        }
+
         self.time += time_difference;
+        debug!("TIME {}", self.time);
         self.last_update = current_time;
     }
 
