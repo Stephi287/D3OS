@@ -59,8 +59,20 @@ impl ReadyState {
         self.weight += weight;
     }
 
+    pub fn find_request_for_thread_mut(&mut self, thread: &Rc<Thread>) -> Option<&mut Request> { 
+        let target_id = thread.id(); 
+        for (_vd, requests) in self.req_tree.iter_mut() { 
+            if let Some(request) = requests.iter_mut()
+            .find(|req| req.thread.as_ref()
+            .map(|t| t.id()) == Some(target_id)) { 
+                return Some(request); 
+            } 
+        } 
+        None 
+    }
+
     /// Sucht in der BTreeMap `req_tree` nach dem Request, der zu `thread` gehört.
-    pub fn find_request_for_thread(&self, thread: &Rc<Thread>) -> Option<Request> {
+     pub fn find_request_for_thread(&self, thread: &Rc<Thread>) -> Option<&Request> {
         let target_id = thread.id();
         // Durchlaufe alle Einträge in der BTreeMap
         for (_vd, requests) in self.req_tree.iter() {
@@ -68,7 +80,7 @@ impl ReadyState {
             for request in requests {
                 if let Some(ref req_thread) = request.thread {
                     if req_thread.id() == target_id {
-                        return Some(request.clone());
+                        return Some(request);
                     }
                 }
             }
