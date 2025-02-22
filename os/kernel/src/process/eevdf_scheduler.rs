@@ -203,7 +203,31 @@ impl Scheduler {
     /// Description: Start the scheduler, called only once from `boot.rs` 
     pub fn start(&self) {
         let mut state = self.get_ready_state();
-        state.current_thread = state.ready_queue.pop_back();
+        //state.current_thread = state.ready_queue.pop_back(); //ersten Thread der rechnen soll auswählen
+
+        let next ={
+            //EEVDF
+            let next_req = match state.req_tree.first_key_value() { //neuen raus nehmen
+                Some(req) => req,
+                None => return,
+            };
+            //falls 2 Requests dieselbe VD haben, den ersten nehmen
+            let next_thread = match next_req.1.first(){
+                Some(req) => req,
+                None => return,
+            };
+            //Thread aus dem Request holen
+            match &next_thread.thread {
+                Some(thread) => thread.clone(),
+                None => return,
+            }
+        };
+
+
+        state.current_thread = Some(next.clone()); //ersten Thread der rechnen soll auswählen
+
+        state.remove_request_for_thread(&next);
+
 
         //Hat Einfügen in den Baum geklappt?
         let l = state.req_tree.len();
@@ -213,7 +237,7 @@ impl Scheduler {
                 debug!("Request {} eingefügt", v.id as i32);
             }
         }
-        debug!("Tree Size: {}", l as i32);
+        debug!("Tree Size: {}", state.req_tree.len());
 
         unsafe { Thread::start_first(state.current_thread.as_ref().expect("Failed to dequeue first thread!").as_ref()); }
     }
