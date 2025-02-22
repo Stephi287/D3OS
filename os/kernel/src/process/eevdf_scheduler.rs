@@ -271,20 +271,20 @@ impl Scheduler {
             }
         }
 
-        state.ready_queue.push_front(thread);
+        state.ready_queue.push_front(thread.clone());
         join_map.insert(id, Vec::new());
 
         //EEVDF
         //Virtual Time: Thread joint zum ersten Mal, lag = 0
         state.update_weight(1);
-        let id = thread2.id();
+        let id = thread.id();
 
         //Einfügen des Threads als Request in die BTreeMap
         let request = Request {
             ve: state.virtual_time,
             vd: state.virtual_time + 10,
             lag: 0,
-            thread: Some(thread2),
+            thread: Some(thread),
             id: id,
         };
 
