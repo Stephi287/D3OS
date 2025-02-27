@@ -197,21 +197,9 @@ impl Scheduler {
         let mut state = self.get_ready_state();
 
         //das als methode?
-        let next ={
-            let next_req = match state.req_tree.first_key_value() { //neuen raus nehmen
-                Some(req) => req,
-                None => return,
-            };
-            //falls 2 Requests dieselbe VD haben, den ersten nehmen
-            let next_thread = match next_req.1.first(){
-                Some(req) => req,
-                None => return,
-            };
-            //Thread aus dem Request holen
-            match &next_thread.thread {
-                Some(thread) => thread.clone(),
-                None => return,
-            }
+        let next = match find_next(&state) {
+            Some(value) => value,
+            None => return,
         };
 
         state.current_thread = Some(next.clone()); //ersten Thread der rechnen soll auswählen
@@ -325,22 +313,9 @@ impl Scheduler {
             }
 
             //next
-            let next = {
-                //erster Eintrag im Baum = niedrigste VD = nächster Request
-                let next_req = match state.req_tree.first_key_value(){ //ersten auslesen
-                    Some(req) => req,
-                    None => return,
-                };
-                //falls 2 Requests dieselbe VD haben, den ersten nehmen
-                let next_thread = match next_req.1.first(){
-                    Some(req) => req,
-                    None => return,
-                };
-                //Thread aus dem Request holen
-                match &next_thread.thread {
-                    Some(thread) => thread.clone(),
-                    None => return,
-                }
+            let next = match find_next(&state) {
+                Some(value) => value,
+                None => return,
             };
 
             //current request wieder einfügen
@@ -646,6 +621,26 @@ impl Scheduler {
         }
     }
     
+}
+
+fn find_next(state: &MutexGuard<'_, ReadyState>) -> Option<Rc<Thread>> {
+    let next ={
+        let next_req = match state.req_tree.first_key_value() { //neuen raus nehmen
+            Some(req) => req,
+            None => return None,
+        };
+        //falls 2 Requests dieselbe VD haben, den ersten nehmen
+        let next_thread = match next_req.1.first(){
+            Some(req) => req,
+            None => return None,
+        };
+        //Thread aus dem Request holen
+        match &next_thread.thread {
+            Some(thread) => thread.clone(),
+            None => return None,
+        }
+    };
+    Some(next)
 }
 
 fn insert_request(state: &mut ReadyState, request: &Request) {
