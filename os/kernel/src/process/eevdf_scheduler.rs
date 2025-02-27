@@ -31,6 +31,7 @@ pub fn next_thread_id() -> usize {
 struct ReadyState {
     initialized: bool, //ob ReadyState korrekt initialisiert ist
     current_thread: Option<Rc<Thread>>, //kein Wert oder geteilter Zeiger auf current_thread
+    current_request: Option<Request>, //kein Wert oder geteilter Zeiger auf current_thread
     req_tree: BTreeMap<i32,Vec<Request>>, 
     virtual_time: i32,
     weight: i32,
@@ -41,6 +42,7 @@ impl ReadyState {
         Self {
             initialized: false,
             current_thread: None,
+            current_request: None,
             req_tree: BTreeMap::new(),
             virtual_time: 0,
             weight: 0,
@@ -284,10 +286,10 @@ impl Scheduler {
             sleep_list.push((request.clone(), wakeup_time));
         }
 
-            self.block_eevdf(&mut state);
+            self.block(&mut state);
     }
 
-    pub fn next_request(&self, interrupt: bool) {
+    pub fn switch_thread(&self, interrupt: bool) {
         if let Some(mut state) = self.ready_state.try_lock() {
 
             if !state.initialized {
@@ -295,7 +297,7 @@ impl Scheduler {
             }
 
             if let Some(mut sleep_list) = self.sleep_list_eevdf.try_lock() {
-                Scheduler::check_sleep_list_eevdf2(&mut state, &mut sleep_list);
+                Scheduler::check_sleep_list(&mut state, &mut sleep_list);
             }
 
             //Current
@@ -382,12 +384,12 @@ impl Scheduler {
 
     /// Description: helper function, calling `switch_thread`
     pub fn switch_thread_no_interrupt(&self) {
-        self.next_request(false);
+        self.switch_thread(false);
     }
 
     /// Description: helper function, calling `switch_thread`
     pub fn switch_thread_from_interrupt(&self) {
-        self.next_request(true);
+        self.switch_thread(true);
     }
 
     /// 
@@ -415,7 +417,7 @@ impl Scheduler {
             }
         }
 
-        self.block_eevdf(&mut state);
+        self.block(&mut state);
     }
 
     /// Description: Exit calling thread.
@@ -449,7 +451,7 @@ impl Scheduler {
         }
 
         drop(current); // Decrease Rc manually, because block() does not return
-        self.block_eevdf(&mut ready_state);
+        self.block(&mut ready_state);
     }
 
     /// 
@@ -505,15 +507,15 @@ impl Scheduler {
         };
     }
 
-    fn block_eevdf(&self, state: &mut ReadyState) {
+    fn block(&self, state: &mut ReadyState) {
         ////debug!("BEGINN BLOCK");
         {
             // Execute in own block, so that the lock is released automatically (block() does not return)
             if let Some(mut sleep_list) = self.sleep_list_eevdf.try_lock() {
-                Scheduler::check_sleep_list_eevdf2(state, &mut sleep_list);
+                Scheduler::check_sleep_list(state, &mut sleep_list);
             }
             //let mut sleep_list = self.sleep_list_eevdf.lock();
-            //Scheduler::check_sleep_list_eevdf2(state, &mut sleep_list);
+            //Scheduler::check_sleep_list(state, &mut sleep_list);
         
         }
         let mut next = None;
@@ -607,7 +609,7 @@ impl Scheduler {
         state.current_request.as_ref().expect("error").clone()
     }
 
-    fn check_sleep_list_eevdf2(state: &mut ReadyState, sleep_list: &mut Vec<(Request, usize)>) {
+    fn check_sleep_list(state: &mut ReadyState, sleep_list: &mut Vec<(Request, usize)>) {
         let current = Scheduler::current(&state);
 
         let time = timer().systime_ms();
