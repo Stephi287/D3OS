@@ -31,7 +31,6 @@ pub fn next_thread_id() -> usize {
 struct ReadyState {
     initialized: bool, //ob ReadyState korrekt initialisiert ist
     current_thread: Option<Rc<Thread>>, //kein Wert oder geteilter Zeiger auf current_thread
-    ready_queue: VecDeque<Rc<Thread>>, //kein Wert oder geteilter Zeiger auf ready_queue
     req_tree: BTreeMap<i32,Vec<Request>>, 
     virtual_time: i32,
     weight: i32,
@@ -42,7 +41,6 @@ impl ReadyState {
         Self {
             initialized: false,
             current_thread: None,
-            ready_queue: VecDeque::new(),
             req_tree: BTreeMap::new(),
             virtual_time: 0,
             weight: 0,
