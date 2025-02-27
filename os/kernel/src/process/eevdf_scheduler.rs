@@ -58,69 +58,50 @@ impl ReadyState {
     }
 
     //wird nur einmal benutzt
-    pub fn find_request_for_thread_mut(&mut self, thread: &Rc<Thread>) -> Option<&mut Request> { 
-        let target_id = thread.id(); 
-        for (_vd, requests) in self.req_tree.iter_mut() { 
-            if let Some(request) = requests.iter_mut()
-            .find(|req| req.thread.as_ref()
-            .map(|t| t.id()) == Some(target_id)) { 
-                return Some(request); 
-            } 
-        } 
-        None 
-    }
-
-    //wird nur einmal benutzt
-     /// Sucht in der BTreeMap `req_tree` nach dem Request, der zu `thread` gehört.
-     pub fn find_request_for_thread(&self, thread: &Rc<Thread>) -> Option<&Request> {
+    pub fn find_request_for_thread_mut(&mut self, thread: &Rc<Thread>) -> Option<&mut Request> {
         let target_id = thread.id();
-        // Durchlaufe alle Einträge in der BTreeMap
-        for (_vd, requests) in self.req_tree.iter() {
-            // Durchsuche den Vektor nach dem Request
-            for request in requests {
-                if let Some(ref req_thread) = request.thread {
-                    if req_thread.id() == target_id {
-                        return Some(request);
-                    }
-                }
-            }
-        }
-        // Falls kein Request gefunden wurde, None zurückgeben.
-        None
+        self.req_tree
+            .values_mut()
+            .flatten()
+            .find(|req| req.thread.as_ref().map(|t| t.id()) == Some(target_id))
+    }
+    
+    //wird nur einmal benutzt
+    /// Sucht in der BTreeMap `req_tree` nach dem Request, der zu `thread` gehört.
+    pub fn find_request_for_thread(&self, thread: &Rc<Thread>) -> Option<&Request> {
+        let target_id = thread.id();
+        self.req_tree
+            .values()
+            .flatten()
+            .find(|request| request.thread.as_ref().map(|t| t.id()) == Some(target_id))
     }
 
     /// Entfernt den Request, der zum gegebenen `thread` gehört, aus der `req_tree`.
     /// Gibt den entfernten Request zurück, falls vorhanden.
     pub fn remove_request_for_thread(&mut self, thread: &Rc<Thread>) -> Option<Request> {
         let target_id = thread.id();
+        let mut key_to_remove = None; // Speichert den Schlüssel, falls die Liste danach leer ist
 
-        // Erstelle eine Kopie aller Schlüssel, damit wir während der Iteration die Map modifizieren können.
-        let keys: Vec<_> = self.req_tree.keys().cloned().collect();
-
-        // Iteriere über alle Schlüssel der BTreeMap.
-        for key in keys {
-            // Hole einen veränderlichen Zugriff auf den Vektor der Requests für den aktuellen Schlüssel.
-            if let Some(requests) = self.req_tree.get_mut(&key) {
-                // Suche nach der Position des Requests, dessen Thread-ID mit target_id übereinstimmt.
-                if let Some(pos) = requests.iter().position(|req| {
-                    req.thread.as_ref().map(|t| t.id()) == Some(target_id)
-                }) {
-                    // Entferne den Request aus dem Vektor.
+        let removed_request = self.req_tree.iter_mut().find_map(|(key, requests)| {
+            requests.iter().position(|req| req.thread.as_ref().map(|t| t.id()) == Some(target_id))
+                .map(|pos| {
                     let removed_request = requests.remove(pos);
-                    
-                    // Wenn der Vektor nach dem Entfernen leer ist, entferne auch den Schlüssel aus der Map.
                     if requests.is_empty() {
-                        self.req_tree.remove(&key);
+                        key_to_remove = Some(*key); // Speichere Schlüssel für spätere Entfernung
                     }
-                    
-                    return Some(removed_request);
-                }
-            }
-        }
-        // Falls kein passender Request gefunden wurde, gebe None zurück.
-        None
+                    removed_request
+                })
+        });
+
+    // Entferne den Schlüssel erst nach der Schleife, um Borrow-Fehler zu vermeiden
+    if let Some(key) = key_to_remove {
+        self.req_tree.remove(&key);
+    }
+
+    removed_request
     }
 }
+
 #[derive(Clone)]
 struct Request {
     vd: i32,
