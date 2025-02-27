@@ -514,20 +514,10 @@ impl Scheduler {
             if let Some(mut sleep_list) = self.sleep_list_eevdf.try_lock() {
                 Scheduler::check_sleep_list(state, &mut sleep_list);
             }
-            //let mut sleep_list = self.sleep_list_eevdf.lock();
-            //Scheduler::check_sleep_list(state, &mut sleep_list);
-        
         }
         let mut next = None;
         let mut id = 0;
 
-        for e in &state.req_tree {
-            for i in e.1 {
-                ////debug!("in block vor next auswahl {}", i.id);
-            }
-        }
-
-        //wird immer ein Thread gefunden?
         while next.is_none() {
             next = {
                 //erster Eintrag im Baum = niedrigste VD = nächster Request
@@ -543,7 +533,6 @@ impl Scheduler {
                 //Thread aus dem Request holen
                 match &next_thread.thread {
                     Some(thread) =>{
-                                                ////debug!("next id {}", thread.id() as i32);
                                                 id = thread.id() as i32;
                                                 Some(thread.clone())},
                     None => return,
@@ -551,48 +540,30 @@ impl Scheduler {
             };
         }
 
-        for e in &state.req_tree {
-            for i in e.1 {
-                ////debug!("in block nach next auswahl {}", i.id);
-            }
-        }
-
         let current = Scheduler::current(&state);
-
-        ////debug!("current id in block {}", current.id() as i32);
-        
-
-        let current_ptr = ptr::from_ref(current.as_ref());
-        let next_ptr = ptr::from_ref(next.clone().unwrap().as_ref());
 
         let mut req = None;
         for e in &state.req_tree {
             for r in e.1 {
-                ////debug!("id: {}", r.id);
                 if r.id as i32 == id{
                     req = Some(r.clone());
-                    ////debug!("Zu next id {} gehört req mit id {}", id, r.id  as i32);
                 }
             }
         }
         
         match req {
             Some(req) => state.current_request = Some(req.clone()),
-            None => {////debug!("zughörigen request nicht gefunden");
-                return},
+            None => return,
         };
+
+        state.current_thread = Some(next.clone().unwrap());
 
         state.remove_request_for_thread(&next.clone().unwrap());
 
-
-        if Some(next.clone()).is_none() {
-            panic!("BLOCK: No thread to schedule!");
-        }
-        state.current_thread = Some(next.unwrap());
+        let current_ptr = ptr::from_ref(current.as_ref());
+        let next_ptr = ptr::from_ref(next.unwrap().as_ref());
 
         drop(current); // Decrease Rc manually, because Thread::switch does not return
-
-        //debug!("BLOCK: cur pointer: {}, next pointer: {}", current_ptr as i32, next_ptr as i32);
 
         unsafe {
             Thread::switch(current_ptr, next_ptr);
