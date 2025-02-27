@@ -434,6 +434,11 @@ impl Thread {
         accounting.reset();
         
     }
+
+    pub fn inital_accounting(&self, current_time: i32) {
+        let mut accounting = self.accounting.lock();
+        accounting.last_update = current_time;
+    }
 }
 
 /// Description: Low-level function for starting a thread in kernel mode
@@ -546,12 +551,10 @@ impl ThreadAccounting {
     pub fn update(&mut self, current_time: i32) {
         let mut time_difference = 0;
 
-        if self.last_update != 0 {
-            time_difference = current_time.saturating_sub(self.last_update);
-        }
+        time_difference = current_time.saturating_sub(self.last_update); 
 
         self.time += time_difference;
-        debug!("TIME {}", self.time);
+        //debug!("TIME {}", self.time);
         self.last_update = current_time;
     }
 
