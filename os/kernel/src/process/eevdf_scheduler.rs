@@ -272,6 +272,7 @@ impl Scheduler {
 
             //Current
             let current = Scheduler::current(&state);
+            let mut current_request = Scheduler::current_request(&state);
             
             // Current thread is initializing itself and may not be interrupted
             if current.stacks_locked() || tss().is_locked() {
@@ -282,12 +283,18 @@ impl Scheduler {
             let x = current.get_accounting();
 
             let current_time = timer().systime_ms();
+            current.update_used_time(current_time as i32);
+            let used_time = current.get_used_time();
 
-            state.virtual_time += x;
+            state.virtual_time += used_time;
+            current_request.lag += used_time - 10;
+            current_request.ve = state.virtual_time;
+            current_request.vd = state.virtual_time + 10;
+            state.current_request = Some(current_request.clone());
 
-            current.update_accounting(current_time as i32);
+            //debug!("Thread {} mit used time: {} und Lag {} zur Zeit: {}, ve: {}", current_request.id as i32, current.get_used_time(), current_request.lag, state.virtual_time, current_request.ve);
 
-            if x >= 10 {
+            if used_time >= 10 {
                 current.reset_acc();
             }
             else {
