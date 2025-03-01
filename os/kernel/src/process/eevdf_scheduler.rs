@@ -632,6 +632,18 @@ impl Scheduler {
     
 }
 
+fn create_request(thread: &Rc<Thread>, id: usize, state: &MutexGuard<'_, ReadyState>) -> Request {
+    let request = Request {
+        ve: state.virtual_time,
+        vd: state.virtual_time + 10, //Standard = 10ms Rechenzeit
+        lag: 0,
+        thread: Some(thread.clone()),
+        id: id,
+        sleep: false,
+    };
+    request
+}
+
 fn find_next(state: &MutexGuard<'_, ReadyState>) -> Option<Rc<Thread>> {
     let next ={
         let next_req = match state.req_tree.first_key_value() { //neuen raus nehmen
