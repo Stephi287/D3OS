@@ -401,6 +401,14 @@ impl Scheduler {
             let join_list = join_map.get_mut(&current.id()).expect("Missing join_map entry!");
 
             for request in join_list {
+                ready_state.weight += 1;
+                ready_state.virtual_time = ready_state.virtual_time.saturating_sub(request.lag / ready_state.weight);
+                //state.virtual_time -= (request.lag / state.weight);
+                request.ve = ready_state.virtual_time;
+                request.vd = request.ve + 10;
+                //////debug!("{} war in join_list", request.id as i32);
+                //////debug!("mit Lag {} zur Zeit {}", request.lag, ready_state.virtual_time);
+
                 if let Some(vec_requests) = ready_state.req_tree.get_mut(&request.vd) {
                     vec_requests.push(request.clone());
                 } 
