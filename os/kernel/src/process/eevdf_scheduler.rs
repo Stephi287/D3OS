@@ -192,6 +192,15 @@ impl Scheduler {
         };
 
         state.remove_request_for_thread(&next);
+        state.update_weight(-1);
+
+        for request_vector in &state.req_tree {
+            for request in request_vector.1 {
+                for thread in &request.thread {
+                    thread.inital_accounting(timer().systime_ms() as i32);
+                }
+            }
+        }
 
         let next_ptr = ptr::from_ref(next.as_ref());
 
