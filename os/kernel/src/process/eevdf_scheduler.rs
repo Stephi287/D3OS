@@ -213,27 +213,12 @@ impl Scheduler {
     
         join_map.insert(id, Vec::new());
     
-        // EEVDF: Erhöhe Gewicht und füge den neuen Request in den Baum ein
-        state.update_weight(1);
-        let request = Request {
-            ve: state.virtual_time,
-            vd: state.virtual_time + 10,
-            lag: 0,
-            thread: Some(thread.clone()),
-            id: id,
-            sleep: false,
-        };
-    
-        if let Some(vec_requests) = state.req_tree.get_mut(&request.vd) {
-            vec_requests.push(request);
-        } else {
-            let key = request.vd;
-            let mut vec_req = Vec::new();
-            vec_req.push(request);
-            state.req_tree.insert(key, vec_req);
-        }
-        let current_time = timer().systime_ms() as i32;
-        thread.inital_accounting(current_time);
+        let request = create_request(&thread, id, &state);
+        insert_request(&mut *state, &request);
+        state.update_weight(1); //Standard = alle haben Gewicht 1
+  
+        //for every thread that joins after start of the scheduler
+        thread.inital_accounting(timer().systime_ms() as i32);
     }
 
     /// Description: Put calling thread to sleep for `ms` milliseconds
