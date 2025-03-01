@@ -476,7 +476,9 @@ impl Scheduler {
             }
         }
         match thread {
-            Some(thread) => ready_state.remove_request_for_thread(&thread),
+            Some(thread) => {let req =ready_state.remove_request_for_thread(&thread);
+                                        ready_state.weight -= 1;
+                                        ready_state.virtual_time += req.unwrap().lag / ready_state.weight;},
             None => return,
         };
     }
