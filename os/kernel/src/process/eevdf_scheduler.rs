@@ -575,7 +575,15 @@ impl Scheduler {
         });
 
         // Füge alle abgelaufenen Requests in den Request-Baum ein
-        for request in expired {
+        for mut request in expired {
+            state.weight += 1;
+            state.virtual_time = state.virtual_time.saturating_sub(request.lag / state.weight);
+            //state.virtual_time -= (request.lag / state.weight);
+            request.ve = state.virtual_time;
+            request.vd = request.ve + 10;
+            //////debug!("Thread {} hat VD {} zur Zeit {}", request.id as i32, request.vd, state.virtual_time);
+            //debug!("{} wieder wach mit Lag {} und ve {}", request.id as i32, request.lag, request.ve);
+
             if let Some(vec_requests) = state.req_tree.get_mut(&request.vd) {
                 vec_requests.push(request);
             } else {
