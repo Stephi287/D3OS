@@ -225,28 +225,35 @@ impl Scheduler {
     pub fn sleep(&self, ms: usize) {
         let mut state = self.get_ready_state();
         let thread = Scheduler::current(&state);
-        let mut request = Scheduler::current_request(&state);
+        let mut current = Scheduler::current_request(&state);
         let wakeup_time = timer().systime_ms() + ms;
 
-        if request.sleep == true {
+        if current.sleep == true {
             return;
         }
 
         if let Some(request2) = state.remove_request_for_thread(&thread) {
             state.update_weight(-1);
             if state.weight > 0 {
-                state.virtual_time += request2.lag / state.weight;
+                ////debug!("sleep, virtial time {} und lag {}", state.virtual_time, request.lag);
+                state.virtual_time += request.lag / state.weight;
             }
-        }
+        } */
 
-        //state.virtual_time += request.lag / state.weight;
+        state.weight -= 1;
+        state.virtual_time += current.lag / state.weight;
+        //////debug!("sleep, virtial time {} und lag {}", state.virtual_time, current.lag);
+
             
         // Execute in own block, so that the lock is released automatically (block() does not return)
         {
             let mut sleep_list = self.sleep_list_eevdf.lock();
-            request.sleep = true;
-            state.current_request = Some(request.clone());
-            sleep_list.push((request.clone(), wakeup_time));
+            current.sleep = true;
+            current.thread.clone().unwrap().reset_acc();
+            state.current_request = Some(current.clone()); //Update dass dieser nun schläft
+            sleep_list.push((current.clone(), wakeup_time.clone()));
+            ////debug!("{} schläft bis {}", current.id as i32, wakeup_time as i32);
+            
         }
 
             self.block(&mut state);
