@@ -417,13 +417,13 @@ impl Thread {
     }
 
     /// Aktualisiert die Accounting-Daten des Threads.
-    pub fn update_accounting(&self, current_time: i32) {
+    pub fn update_used_time(&self, current_time: i32) {
         // Sperre den Mutex und rufe die update()-Methode auf.
         let mut accounting = self.accounting.lock();
         accounting.update(current_time);
     }
 
-    pub fn get_accounting(&self) -> i32 {
+    pub fn get_used_time(&self) -> i32 {
         // Sperre den Mutex und rufe die update()-Methode auf.
         let  accounting = self.accounting.lock();
         return accounting.time;
@@ -543,7 +543,8 @@ unsafe extern "C" fn thread_switch(current_rsp0: *mut u64, next_rsp0: u64, next_
 
 
 pub struct ThreadAccounting {
-    pub time: i32,
+    pub 
+    time: i32,
     pub last_update: i32,
 }
 
