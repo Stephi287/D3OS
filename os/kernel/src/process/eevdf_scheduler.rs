@@ -371,10 +371,12 @@ impl Scheduler {
         {
             // Execute in own block, so that the lock is released automatically (block() does not return)
             let mut join_map = self.join_map.lock();
-            let join_list = join_map.get_mut(&thread_id); //Warteliste für Threads mit id 5 holen
+            let join_list = join_map.get_mut(&thread_id); //Warteliste für Thread 5 holen, jeder Thread bekommt Warteliste initial angelegt
             if join_list.is_some() {
-                join_list.unwrap().push(request); //thread 2 in die Warteliste packen
-
+                join_list.unwrap().push(request.clone()); //Thread 2 in die Warteliste packen = Thread 2 wartet, dass Thread 5 fertig wird
+                //////debug!("{} jetzt in join liste von {}", thread.id(), thread_id);
+                state.weight -= 1;
+                state.virtual_time += request.lag / state.weight;
             } else {
                 // Joining on a non-existent thread has no effect (i.e. the thread has already finished running)
                 return;
