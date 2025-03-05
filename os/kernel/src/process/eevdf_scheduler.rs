@@ -19,26 +19,25 @@ use smallmap::Map;
 use spin::{Mutex, MutexGuard};
 use log::{debug, info, warn, LevelFilter};
 
-// thread IDs
-static THREAD_ID_COUNTER: AtomicUsize = AtomicUsize::new(1); //der erste Thread hat die ID = 1 
+static THREAD_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 pub fn next_thread_id() -> usize {
-    THREAD_ID_COUNTER.fetch_add(1, Relaxed) //fetch_add = ID um 1 erhöhen und returnen
+    THREAD_ID_COUNTER.fetch_add(1, Relaxed)
 }
 
-/// Everything related to the ready state in the scheduler
-//Threads die ready sind und warten vom Scheduler eingeteilt zu werden
+/// Everything related to the ready state in the scheduler and information for eevdf 
 struct ReadyState {
-    initialized: bool, //ob ReadyState korrekt initialisiert ist
-    current_thread: Option<Rc<Thread>>, //kein Wert oder geteilter Zeiger auf current_thread
-    current_request: Option<Request>, //kein Wert oder geteilter Zeiger auf current_thread
-    req_tree: BTreeMap<i32,Vec<Request>>, 
+    initialized: bool,
+    current_thread: Option<Rc<Thread>>,
+    current_request: Option<Request>,
+    req_tree: BTreeMap<i32,Vec<Request>>,
     virtual_time: i32,
-    weight: i32,
+    weight: i32, //sum of all active threads
+    duration: i32, //how long is a thread supposed to work
 }
 
 impl ReadyState {
-    pub fn new() -> Self { //quasi Konstruktor für ReadyState
+    pub fn new() -> Self { 
         Self {
             initialized: false,
             current_thread: None,
@@ -46,18 +45,15 @@ impl ReadyState {
             req_tree: BTreeMap::new(),
             virtual_time: 0,
             weight: 0,
+            duration: 10,
         }
-    }
-
-    pub fn update_virtual_time(&mut self, time: i32) {
-        self.virtual_time += time;
     }
 
     pub fn update_weight(&mut self, weight: i32) {
         self.weight += weight;
     }
 
-    //wird nur einmal benutzt
+    /// finds a mutable request for a given thread
     pub fn find_request_for_thread_mut(&mut self, thread: &Rc<Thread>) -> Option<&mut Request> {
         let target_id = thread.id();
         self.req_tree
@@ -66,8 +62,7 @@ impl ReadyState {
             .find(|req| req.thread.as_ref().map(|t| t.id()) == Some(target_id))
     }
     
-    //wird nur einmal benutzt
-    /// Sucht in der BTreeMap `req_tree` nach dem Request, der zu `thread` gehört.
+    /// finds a request for a given thread
     pub fn find_request_for_thread(&self, thread: &Rc<Thread>) -> Option<&Request> {
         let target_id = thread.id();
         self.req_tree
@@ -76,29 +71,26 @@ impl ReadyState {
             .find(|request| request.thread.as_ref().map(|t| t.id()) == Some(target_id))
     }
 
-    /// Entfernt den Request, der zum gegebenen `thread` gehört, aus der `req_tree`.
-    /// Gibt den entfernten Request zurück, falls vorhanden.
+    /// Tries to removes a request for a given thread and returns it if so
     pub fn remove_request_for_thread(&mut self, thread: &Rc<Thread>) -> Option<Request> {
         let target_id = thread.id();
-        let mut key_to_remove = None; // Speichert den Schlüssel, falls die Liste danach leer ist
+        let mut key_to_remove = None;
 
         let removed_request = self.req_tree.iter_mut().find_map(|(key, requests)| {
             requests.iter().position(|req| req.thread.as_ref().map(|t| t.id()) == Some(target_id))
                 .map(|pos| {
                     let removed_request = requests.remove(pos);
                     if requests.is_empty() {
-                        key_to_remove = Some(*key); // Speichere Schlüssel für spätere Entfernung
+                        key_to_remove = Some(*key);
                     }
                     removed_request
                 })
         });
 
-    // Entferne den Schlüssel erst nach der Schleife, um Borrow-Fehler zu vermeiden
-    if let Some(key) = key_to_remove {
-        self.req_tree.remove(&key);
-    }
-
-    removed_request
+        if let Some(key) = key_to_remove {
+            self.req_tree.remove(&key);
+        }
+        return removed_request;
     }
 }
 
@@ -144,11 +136,9 @@ impl Scheduler {
     }
 
     pub fn active_thread_ids(&self) -> Vec<usize> {
-        // Zustand holen und sleep_list sperren, um Konsistenz zu gewährleisten
         let state = self.get_ready_state();
         let _sleep_list = self.sleep_list_eevdf.lock();
     
-        // Alle aktiven Threads (nicht schlafende Requests mit Some(thread)) sammeln
         state.req_tree.values()
             .flat_map(|requests| {
                 requests.iter()
@@ -166,24 +156,23 @@ impl Scheduler {
 
     /// Description: Return reference to thread for the given `thread_id`
     pub fn thread(&self, thread_id: usize) -> Option<Rc<Thread>> {
-        self.ready_state.lock().req_tree //ready state locken, um aktuellen Thread zu finden
+        self.ready_state.lock().req_tree 
             .values()
             .flatten()
-            .find(|req| req.thread.as_ref().map(|t| t.id()) == Some(thread_id)) // Den passenden Request finden
-            .and_then(|req| req.thread.clone()) // Den Thread aus dem Request zurückgeben
+            .find(|req| req.thread.as_ref().map(|t| t.id()) == Some(thread_id)) 
+            .and_then(|req| req.thread.clone()) 
     }
 
     /// Description: Start the scheduler, called only once from `boot.rs` 
     pub fn start(&self) {
         let mut state = self.get_ready_state();
 
-        //das als methode?
         let next = match find_next(&state) {
             Some(value) => value,
             None => return,
         };
 
-        state.current_thread = Some(next.clone()); //ersten Thread der rechnen soll auswählen
+        state.current_thread = Some(next.clone());
         
         let req = state.find_request_for_thread(&next);
         match req {
@@ -192,8 +181,8 @@ impl Scheduler {
         };
 
         state.remove_request_for_thread(&next);
-        state.update_weight(-1);
 
+        //Initialize Accounting information for already added threads
         for request_vector in &state.req_tree {
             for request in request_vector.1 {
                 for thread in &request.thread {
@@ -215,7 +204,7 @@ impl Scheduler {
     
         let request = create_request(&thread, id, &state);
         insert_request(&mut *state, &request);
-        state.update_weight(1); //Standard = alle haben Gewicht 1
+        state.update_weight(1); 
   
         //for every thread that joins after start of the scheduler
         thread.inital_accounting(timer().systime_ms() as i32);
@@ -232,31 +221,19 @@ impl Scheduler {
             return;
         }
 
-        if let Some(request2) = state.remove_request_for_thread(&thread) {
-            state.update_weight(-1);
-            if state.weight > 0 {
-                ////debug!("sleep, virtial time {} und lag {}", state.virtual_time, request.lag);
-                state.virtual_time += request.lag / state.weight;
-            }
-        } */
-
         state.weight -= 1;
         state.virtual_time += current.lag / state.weight;
-        //////debug!("sleep, virtial time {} und lag {}", state.virtual_time, current.lag);
 
-            
         // Execute in own block, so that the lock is released automatically (block() does not return)
         {
             let mut sleep_list = self.sleep_list_eevdf.lock();
             current.sleep = true;
             current.thread.clone().unwrap().reset_acc();
-            state.current_request = Some(current.clone()); //Update dass dieser nun schläft
+            state.current_request = Some(current.clone());
             sleep_list.push((current.clone(), wakeup_time.clone()));
-            ////debug!("{} schläft bis {}", current.id as i32, wakeup_time as i32);
-            
         }
 
-            self.block(&mut state);
+        self.block(&mut state);
     }
 
     pub fn switch_thread(&self, interrupt: bool) {
@@ -280,25 +257,18 @@ impl Scheduler {
             }
 
             //Accounting
-            let x = current.get_accounting();
-
             let current_time = timer().systime_ms();
             current.update_used_time(current_time as i32);
             let used_time = current.get_used_time();
 
             state.virtual_time += used_time;
-            current_request.lag += used_time - 10;
-            current_request.ve = state.virtual_time;
-            current_request.vd = state.virtual_time + 10;
+            current_request.lag += state.duration - used_time;
+            current_request.ve += used_time;
+            current_request.vd = current_request.ve + state.duration;
             state.current_request = Some(current_request.clone());
 
-            //debug!("Thread {} mit used time: {} und Lag {} zur Zeit: {}, ve: {}", current_request.id as i32, current.get_used_time(), current_request.lag, state.virtual_time, current_request.ve);
-
-            if used_time >= 10 {
+            if used_time >= state.duration {
                 current.reset_acc();
-            }
-            else {
-                //////debug!("FAIL Updated thread runtime: {} for ID {}", x, current.id());
             }
 
             //next
@@ -307,38 +277,29 @@ impl Scheduler {
                 None => return,
             };
 
-            //current request wieder einfügen
+            //add current request back to request tree
             let request = Scheduler::current_request(&state);
 
             if !request.thread.is_none() {
                 insert_request(&mut state, &request);
             }
 
-            //next request entfernen
+            //remove next request from request tree
             let next_req = match state.remove_request_for_thread(&next) {
                 Some(next_req) => next_req,
                 None => return,
             };
 
-            //Pointer auf aktuellen und nächsten Thread finden
             let current_ptr = ptr::from_ref(current.as_ref());
             let next_ptr = ptr::from_ref(next.as_ref());
        
-            //aktuellen Thread auf nächsten setzen im ReadyState
+            //Update ReadyState
             state.current_thread = Some(next.clone());
             state.current_request = Some(next_req.clone());
-
-            //Berechnung der neuen vd ?
-            //Berechnung von lag -> wie lang wurde tatsächlich gerechnet
-            //state.req_tree.insert(next_thread.vd, next_req.1); //alten wieder rein tun
 
             if interrupt {
                 apic().end_of_interrupt();
             }
-
-            //debug!("cur pointer: {}, next pointer: {}", current_ptr as i32, next_ptr as i32);
-
-            //debug!("ENDE NEXT REQUEST");
 
             unsafe {
                 Thread::switch(current_ptr, next_ptr);
@@ -366,15 +327,12 @@ impl Scheduler {
         let thread = Scheduler::current(&state); 
         let request = Scheduler::current_request(&state); 
 
-        //debug!("current ist {} und übergebene id ist {}", thread.id() as i32, thread_id as i32); //z.b. current = 2 und thread_id = 5
-
         {
             // Execute in own block, so that the lock is released automatically (block() does not return)
             let mut join_map = self.join_map.lock();
-            let join_list = join_map.get_mut(&thread_id); //Warteliste für Thread 5 holen, jeder Thread bekommt Warteliste initial angelegt
+            let join_list = join_map.get_mut(&thread_id); 
             if join_list.is_some() {
-                join_list.unwrap().push(request.clone()); //Thread 2 in die Warteliste packen = Thread 2 wartet, dass Thread 5 fertig wird
-                //////debug!("{} jetzt in join liste von {}", thread.id(), thread_id);
+                join_list.unwrap().push(request.clone()); 
                 state.weight -= 1;
                 state.virtual_time += request.lag / state.weight;
             } else {
@@ -382,7 +340,6 @@ impl Scheduler {
                 return;
             }
         }
-
         self.block(&mut state);
     }
 
@@ -403,26 +360,27 @@ impl Scheduler {
             for request in join_list {
                 ready_state.weight += 1;
                 ready_state.virtual_time = ready_state.virtual_time.saturating_sub(request.lag / ready_state.weight);
-                //state.virtual_time -= (request.lag / state.weight);
                 request.ve = ready_state.virtual_time;
-                request.vd = request.ve + 10;
-                //////debug!("{} war in join_list", request.id as i32);
-                //////debug!("mit Lag {} zur Zeit {}", request.lag, ready_state.virtual_time);
+                request.vd = request.ve + ready_state.duration;
 
                 if let Some(vec_requests) = ready_state.req_tree.get_mut(&request.vd) {
                     vec_requests.push(request.clone());
                 } 
                 else {
-                    //neu hinzufügen
                     let key = request.vd;
                     let mut vec_req  = Vec::new();
                     vec_req.push(request.clone());
                     ready_state.req_tree.insert(key, vec_req);   
                 }
             }
-            ////debug!("Exit Thread {}", current.id());
+
             join_map.remove(&current.id());
+
+            let req = Scheduler::current_request(&ready_state);
+            ready_state.weight -= 1;
+            ready_state.virtual_time += req.lag / ready_state.weight;
         }
+
 
         drop(current); // Decrease Rc manually, because block() does not return
         self.block(&mut ready_state);
@@ -442,7 +400,6 @@ impl Scheduler {
             if current.id() == thread_id {
                 panic!("A thread cannot kill itself!");
             }
-            ////debug!("Kill Thread {}", current.id());
         }
 
         let state = self.get_ready_state_and_join_map();
@@ -457,7 +414,6 @@ impl Scheduler {
                 vec_requests.push(request.clone());
             } 
             else {
-                //neu hinzufügen
                 let key = request.vd;
                 let mut vec_req  = Vec::new();
                 vec_req.push(request.clone());
@@ -484,7 +440,6 @@ impl Scheduler {
     }
 
     fn block(&self, state: &mut ReadyState) {
-        ////debug!("BEGINN BLOCK");
         {
             // Execute in own block, so that the lock is released automatically (block() does not return)
             if let Some(mut sleep_list) = self.sleep_list_eevdf.try_lock() {
@@ -496,17 +451,17 @@ impl Scheduler {
 
         while next.is_none() {
             next = {
-                //erster Eintrag im Baum = niedrigste VD = nächster Request
-                let mut next_req = match state.req_tree.clone().pop_first(){ //neuen raus nehmen
+                //first entry in tree = lowest VD = next Request
+                let mut next_req = match state.req_tree.clone().pop_first(){ 
                     Some(req) => req,
                     None => return,
                 };
-                //falls 2 Requests dieselbe VD haben, den ersten nehmen
+                //if 2 requests have the same VD choose the last
                 let next_thread = match next_req.1.clone().pop(){
                     Some(req) => req,
                     None => return,
                 };
-                //Thread aus dem Request holen
+                //exract thread out of request
                 match &next_thread.thread {
                     Some(thread) =>{
                                                 id = thread.id() as i32;
@@ -515,6 +470,7 @@ impl Scheduler {
                 }
             };
         }
+
 
         let current = Scheduler::current(&state);
 
@@ -551,7 +507,7 @@ impl Scheduler {
         Rc::clone(state.current_thread.as_ref().expect("Trying to access current thread before initialization!"))
     }
 
-    /// Description: Return current running thread
+    /// Description: Return current request
     fn current_request(state: &ReadyState) -> Request {
         state.current_request.as_ref().expect("error").clone()
     }
@@ -560,29 +516,24 @@ impl Scheduler {
         let current = Scheduler::current(&state);
 
         let time = timer().systime_ms();
-        // Sammle alle abgelaufenen Requests in einem temporären Vektor
         let mut expired = Vec::new();
         sleep_list.retain(|entry| {
             if time >= entry.1 {
                 let mut e = entry.0.clone();
                 e.sleep = false;
                 expired.push(e.clone());
-                false // Entferne abgelaufene Einträge
+                false
             } else {
-                //debug!("Wacht auf um {}", entry.1 as i32);
                 true
             }
         });
 
-        // Füge alle abgelaufenen Requests in den Request-Baum ein
+        // Add requests back to request tree if awake
         for mut request in expired {
             state.weight += 1;
             state.virtual_time = state.virtual_time.saturating_sub(request.lag / state.weight);
-            //state.virtual_time -= (request.lag / state.weight);
             request.ve = state.virtual_time;
-            request.vd = request.ve + 10;
-            //////debug!("Thread {} hat VD {} zur Zeit {}", request.id as i32, request.vd, state.virtual_time);
-            //debug!("{} wieder wach mit Lag {} und ve {}", request.id as i32, request.lag, request.ve);
+            request.vd = request.ve + state.duration;
 
             if let Some(vec_requests) = state.req_tree.get_mut(&request.vd) {
                 vec_requests.push(request);
@@ -592,6 +543,7 @@ impl Scheduler {
                 state.req_tree.insert(request.vd, requests);
             }
         }
+
         return;
     }
     
@@ -635,7 +587,7 @@ impl Scheduler {
 fn create_request(thread: &Rc<Thread>, id: usize, state: &MutexGuard<'_, ReadyState>) -> Request {
     let request = Request {
         ve: state.virtual_time,
-        vd: state.virtual_time + 10, //Standard = 10ms Rechenzeit
+        vd: state.virtual_time + state.duration, 
         lag: 0,
         thread: Some(thread.clone()),
         id: id,
@@ -645,23 +597,25 @@ fn create_request(thread: &Rc<Thread>, id: usize, state: &MutexGuard<'_, ReadySt
 }
 
 fn find_next(state: &MutexGuard<'_, ReadyState>) -> Option<Rc<Thread>> {
-    let next ={
-        let next_req = match state.req_tree.first_key_value() { //neuen raus nehmen
+    let len = state.req_tree.len() as i32;
+    let mut req_tree = state.req_tree.clone();
+    for i in 0..len {
+        let next_req = match req_tree.pop_first() {
             Some(req) => req,
-            None => return None,
+            None => break,
         };
-        //falls 2 Requests dieselbe VD haben, den ersten nehmen
-        let next_thread = match next_req.1.first(){
-            Some(req) => req,
-            None => return None,
-        };
-        //Thread aus dem Request holen
-        match &next_thread.thread {
-            Some(thread) => thread.clone(),
-            None => return None,
+
+        for r in next_req.1 {
+            if r.lag >= 0 {
+                return r.thread;
+            }
         }
     };
-    Some(next)
+    let req= match state.req_tree.first_key_value() {
+        Some(req) => req.1.first().unwrap().thread.clone(),
+        None => return None,
+    };
+    return req;
 }
 
 fn insert_request(state: &mut ReadyState, request: &Request) {
